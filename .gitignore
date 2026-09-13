@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+data/raw_1c/
+data/*.parquet
+data/*.csv
+data/*.xlsx
+models/*/
+!models/.gitkeep
+.pytest_cache/
+.ipynb_checkpoints/
+catboost_info/
+.DS_Store

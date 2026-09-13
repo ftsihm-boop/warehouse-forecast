@@ -1,0 +1,19 @@
+# --- ядро (обязательно) ---
+pandas>=2.0
+numpy>=1.24
+scikit-learn>=1.3
+openpyxl>=3.1          # чтение .xlsx
+
+# --- модель ---
+catboost>=1.2          # основной бэкенд; без него работает sklearn-фолбэк
+
+# --- API ---
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9   # загрузка файлов через multipart/form-data
+
+# --- опционально ---
+pyarrow>=14.0          # parquet для больших датасетов
+pytest>=7.0            # тесты
+# prophet>=1.1         # для сравнительной таблицы в курсовой
+# statsmodels>=0.14    # SARIMA, там же
