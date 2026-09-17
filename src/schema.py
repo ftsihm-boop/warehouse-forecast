@@ -74,12 +74,16 @@ MODE_FINE_TUNE = "fine_tune"
 MODE_GLOBAL = "global"
 MODE_STATS = "stats"
 MODE_REJECT = "reject"
+# Спрос товара непрогнозируем по своей природе (редкий и хаотичный):
+# ML к нему не применяется независимо от длины истории — см. demand_classes.py
+MODE_MINMAX = "minmax"
 
 MODE_LABELS_RU = {
     MODE_FINE_TUNE: "Дообучение на ваших данных",
     MODE_GLOBAL: "Предобученная модель",
     MODE_STATS: "Статистика (данных мало)",
     MODE_REJECT: "Недостаточно данных",
+    MODE_MINMAX: "Правило min/max (спрос нерегулярный)",
 }
 
 # --- Параметры прогноза -------------------------------------------------------

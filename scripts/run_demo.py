@@ -18,10 +18,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.backtest import Economics, backtest  # noqa: E402
 from src.cleaning import load_and_clean  # noqa: E402
+from src.demand_classes import profile_all, summary_text  # noqa: E402
 from src.evaluate import evaluate_baselines  # noqa: E402
 from src.forecast import forecast, forecast_curve  # noqa: E402
 from src.inventory import build_order_plan  # noqa: E402
 from src.model import QuantileModel  # noqa: E402
+from src.schema import DATE, FLAG_CENSORED, FLAG_FILLED, FLAG_RETURN, FLAG_WINSORIZED, SKU  # noqa: E402
 from src.train import train_global  # noqa: E402
 
 pd.set_option("display.width", 220)
@@ -41,15 +43,41 @@ def main() -> None:
     ap.add_argument("--horizon", type=int, default=30)
     ap.add_argument("--lead-time", type=int, default=7)
     ap.add_argument("--train", action="store_true", help="переобучить модель")
+    ap.add_argument("--skip-clean", action="store_true",
+                    help="данные уже в каноническом формате (например, после prepare_1c.py)")
     a = ap.parse_args()
 
-    # --- 1. очистка ---------------------------------------------------------
-    header("ШАГ 1. ОЧИСТКА ДАННЫХ")
-    df, report = load_and_clean(a.data)
-    print(report.to_text())
+    # --- 1. очистка (или загрузка уже готовых канонических данных) ----------
+    path = Path(a.data)
+    if a.skip_clean or path.suffix == ".parquet":
+        header("ШАГ 1. ДАННЫЕ УЖЕ В КАНОНИЧЕСКОМ ФОРМАТЕ — ОЧИСТКА НЕ ТРЕБУЕТСЯ")
+        df = (pd.read_parquet(path) if path.suffix == ".parquet"
+              else pd.read_csv(path, parse_dates=[DATE]))
+        df[DATE] = pd.to_datetime(df[DATE])
+        for col in (FLAG_FILLED, FLAG_CENSORED, FLAG_WINSORIZED, FLAG_RETURN):
+            if col not in df.columns:
+                df[col] = False
+        print(f"Загружено {len(df):,} строк, {df[SKU].nunique()} рядов "
+              f"(например, магазин+товар после подготовки датасета 1С)")
+        print(f"Период: {df[DATE].min().date()} — {df[DATE].max().date()}")
+    else:
+        header("ШАГ 1. ОЧИСТКА ДАННЫХ")
+        df, report = load_and_clean(a.data)
+        print(report.to_text())
+        header("СОСТОЯНИЕ ПО ТОВАРАМ")
+        print(pd.DataFrame(report.per_sku).to_string(index=False))
 
-    header("СОСТОЯНИЕ ПО ТОВАРАМ")
-    print(pd.DataFrame(report.per_sku).to_string(index=False))
+    # --- 1б. классификация спроса ------------------------------------------
+    header("ШАГ 1б. КЛАССИФИКАЦИЯ ТОВАРОВ ПО ХАРАКТЕРУ СПРОСА")
+    profiles = profile_all(df)
+    print(summary_text(profiles))
+    if not profiles.empty:
+        print("\nТоп-15 товаров по обороту:")
+        cols = ["sku", "class_label", "abc_class", "adi", "cv2",
+                "mean_daily", "zero_share", "forecastable"]
+        top = profiles.head(15)[cols].copy()
+        top["sku"] = top["sku"].str.slice(0, 44)
+        print(top.to_string(index=False))
 
     # --- 2. модель ----------------------------------------------------------
     model_dir = Path(a.model)

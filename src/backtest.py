@@ -29,6 +29,7 @@ from dataclasses import dataclass, asdict
 import numpy as np
 import pandas as pd
 
+from .demand_classes import profile_all
 from .forecast import stats_forecast
 from .model import QuantileModel
 from .features import BASE_COL, FEATURE_COLUMNS, inference_rows
@@ -186,10 +187,30 @@ def backtest_sku(
 
 
 def backtest(df: pd.DataFrame, model: QuantileModel | None = None,
-             econ: Economics | None = None, **kwargs) -> tuple[pd.DataFrame, dict]:
-    """Бэктест по всем товарам. Возвращает (таблица по SKU, сводка)."""
+             econ: Economics | None = None,
+             only_forecastable: bool = True, **kwargs
+             ) -> tuple[pd.DataFrame, dict]:
+    """
+    Бэктест по всем товарам. Возвращает (таблица по SKU, сводка).
+
+    only_forecastable=True (по умолчанию) считает экономический эффект
+    только по товарам, для которых ML-прогноз вообще применим. Это не
+    «подгонка результата», а корректная постановка: система не обещает
+    прогнозировать хаотичный спрос, поэтому и мерить её на таких товарах
+    нечестно — они закупаются по правилу min/max, а не по прогнозу.
+    Число исключённых позиций попадает в сводку, так что картина остаётся
+    прозрачной.
+    """
     econ = econ or Economics()
     rows, totals = [], {"baseline": {}, "ml": {}}
+
+    excluded = 0
+    if only_forecastable and not df.empty:
+        profiles = profile_all(df)
+        if not profiles.empty:
+            ok = set(profiles.loc[profiles["forecastable"], "sku"])
+            excluded = int(df[SKU].nunique() - len(ok))
+            df = df[df[SKU].isin(ok)]
 
     for _, g in df.groupby(SKU, sort=False):
         r = backtest_sku(g, model, econ=econ, **kwargs)
@@ -222,14 +243,20 @@ def backtest(df: pd.DataFrame, model: QuantileModel | None = None,
     b, m = totals["baseline"], totals["ml"]
     summary = {
         "Период бэктеста, дней": days,
+        "Товаров в расчёте эффекта": len(table),
+        "Исключено (спрос непрогнозируем)": excluded,
         "Средний остаток as-is, ₽": round(b["avg_stock_value"]),
         "Средний остаток to-be, ₽": round(m["avg_stock_value"]),
         "Снижение остатка, %": round(
             (1 - m["avg_stock_value"] / max(b["avg_stock_value"], 1)) * 100, 1),
         "Упущенная выручка as-is, ₽": round(b["lost_revenue"]),
         "Упущенная выручка to-be, ₽": round(m["lost_revenue"]),
-        "Снижение потерь от дефицита, %": round(
-            (1 - m["lost_revenue"] / max(b["lost_revenue"], 1)) * 100, 1),
+        # Процент считаем только если базе есть что снижать: при потерях
+        # около нуля относительная метрика теряет смысл (0 -> 6 руб. это
+        # не «минус 500%», а статистический шум).
+        "Снижение потерь от дефицита, %": (
+            round((1 - m["lost_revenue"] / b["lost_revenue"]) * 100, 1)
+            if b["lost_revenue"] >= 100 else "н/д (потерь почти нет)"),
         "Затраты на хранение as-is, ₽": round(b["holding_cost"]),
         "Затраты на хранение to-be, ₽": round(m["holding_cost"]),
         "Совокупный эффект за период, ₽": round(b["total_cost"] - m["total_cost"]),

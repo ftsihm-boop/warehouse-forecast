@@ -28,14 +28,38 @@
 from __future__ import annotations
 
 import argparse
+import re
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from src.demand_classes import split_by_forecastability, summary_text  # noqa: E402
+
+# Датасет 1С — это выгрузка магазинов, торгующих софтом и медиа, и вперемешку
+# там встречаются строки, которые физическим товаром вообще не являются:
+# приём платежей, доставка, подписки, услуги поддержки. У них нет "остатка
+# на складе" в осмысленном виде, и они портят экономику бэктеста (можно
+# получить отрицательный эффект просто из-за пары таких строк с большим
+# числом транзакций). Отсекаем по ключевым словам в названии.
+SERVICE_KEYWORDS = [
+    "прием", "приём", "оплата", "платеж", "платёж", "доставка",
+    "подписк", "билет", "сертификат", "услуга", "услуги", "поддержк",
+    "бонус", "сервисн", "техническ", "гарантийн", "настройк",
+]
+
+
+def is_service_row(name: str) -> bool:
+    n = name.lower()
+    return any(k in n for k in SERVICE_KEYWORDS)
+
 
 def build(raw_dir: Path, min_days: int, max_series: int,
-          min_mean_daily: float) -> pd.DataFrame:
+          min_mean_daily: float, exclude_services: bool = True,
+          classify: bool = True) -> pd.DataFrame:
     sales_path = raw_dir / "sales_train.csv"
     if not sales_path.exists():
         raise SystemExit(
@@ -58,6 +82,23 @@ def build(raw_dir: Path, min_days: int, max_series: int,
     sales.loc[sales["item_cnt_day"] < 0, "item_cnt_day"] = 0.0
     print(f"  возвратов обнулено: {returns:,}")
 
+    # --- названия товаров и фильтр услуг ------------------------------------
+    # Делаем это ДО отбора топ-N рядов: если убрать услуги после отбора,
+    # физические товары, которые из-за услуг не попали в топ, потеряются
+    # безвозвратно. Фильтруем сначала — тогда их место в топе займут они.
+    items_path = raw_dir / "items.csv"
+    have_names = items_path.exists()
+    if have_names:
+        items = pd.read_csv(items_path)[["item_id", "item_name"]]
+        if exclude_services:
+            services = items[items["item_name"].fillna("").map(is_service_row)]
+            if len(services):
+                print(f"  исключено услуг/не-товарных позиций по названию: "
+                      f"{len(services)} из {len(items)} "
+                      f"(например: {services['item_name'].iloc[0][:50]!r})")
+                sales = sales[~sales["item_id"].isin(services["item_id"])]
+                items = items[~items["item_id"].isin(services["item_id"])]
+
     # --- отбор рядов --------------------------------------------------------
     print("Отбор рядов с длинной историей ...")
     grp = sales.groupby(["shop_id", "item_id"])
@@ -75,10 +116,7 @@ def build(raw_dir: Path, min_days: int, max_series: int,
 
     sel = sales.merge(keep[["shop_id", "item_id"]], on=["shop_id", "item_id"])
 
-    # --- названия товаров ---------------------------------------------------
-    items_path = raw_dir / "items.csv"
-    if items_path.exists():
-        items = pd.read_csv(items_path)[["item_id", "item_name"]]
+    if have_names:
         sel = sel.merge(items, on="item_id", how="left")
         sel["item_name"] = sel["item_name"].fillna("").str.slice(0, 60)
         sel["sku"] = ("Магазин " + sel["shop_id"].astype(str) + " / "
@@ -115,19 +153,48 @@ def build(raw_dir: Path, min_days: int, max_series: int,
 
     out = out[["date", "sku", "qty", "stock", "is_filled", "is_censored",
                "is_winsorized", "is_return"]]
-    return out.sort_values(["sku", "date"]).reset_index(drop=True)
+    out = out.sort_values(["sku", "date"]).reset_index(drop=True)
+
+    # --- отбор по ХАРАКТЕРУ спроса, а не по объёму --------------------------
+    # Ручной порог --min-mean-daily смотрит только на средний объём и
+    # пропускает товары, которые продаются «редко, но помногу» — именно
+    # они раздувают страховой запас и уводят экономику в минус.
+    # Классификация SBC смотрит на регулярность и стабильность спроса.
+    if classify:
+        print("Классификация товаров по характеру спроса ...")
+        keep_df, drop_df, profiles = split_by_forecastability(
+            out, min_history_days=min_days)
+        print(summary_text(profiles))
+        if not keep_df.empty:
+            n_drop = out["sku"].nunique() - keep_df["sku"].nunique()
+            print(f"\n  Исключено из обучения: {n_drop} товар(ов) "
+                  "с непрогнозируемым спросом")
+            out = keep_df
+        else:
+            print("\n  ВНИМАНИЕ: ни один товар не прошёл классификацию — "
+                  "оставляем выборку без изменений.")
+
+    return out.reset_index(drop=True)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--raw", default="data/raw_1c", help="папка с sales_train.csv")
     ap.add_argument("--out", default="data/1c_canonical.parquet")
-    ap.add_argument("--min-days", type=int, default=400)
-    ap.add_argument("--max-series", type=int, default=500)
-    ap.add_argument("--min-mean-daily", type=float, default=0.5)
+    ap.add_argument("--min-days", type=int, default=200)
+    ap.add_argument("--max-series", type=int, default=2000)
+    ap.add_argument("--min-mean-daily", type=float, default=0.2)
+    ap.add_argument("--include-services", action="store_true",
+                    help="не отсеивать позиции вида «приём платежей», "
+                         "«доставка» и т.п. (по умолчанию они исключаются)")
+    ap.add_argument("--no-classify", action="store_true",
+                    help="не отсеивать товары с непрогнозируемым спросом "
+                         "(по умолчанию отсеиваются по методике SBC)")
     a = ap.parse_args()
 
-    df = build(Path(a.raw), a.min_days, a.max_series, a.min_mean_daily)
+    df = build(Path(a.raw), a.min_days, a.max_series, a.min_mean_daily,
+              exclude_services=not a.include_services,
+              classify=not a.no_classify)
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.suffix == ".parquet":

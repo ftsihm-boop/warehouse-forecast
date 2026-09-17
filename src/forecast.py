@@ -27,9 +27,12 @@ from .features import (
     inference_rows,
 )
 from .model import QuantileModel
+from .demand_classes import (
+    CLASS_LABELS_RU, NOT_FORECASTABLE, STATS_ONLY, STRATEGY_RU, classify_series,
+)
 from .schema import (
     DATE, FLAG_CENSORED, MODE_FINE_TUNE, MODE_GLOBAL, MODE_LABELS_RU,
-    MODE_REJECT, MODE_STATS, QTY, SKU, STOCK,
+    MODE_MINMAX, MODE_REJECT, MODE_STATS, QTY, SKU, STOCK,
 )
 
 # сколько дней истории минимум нужно, чтобы дообучение имело смысл
@@ -68,12 +71,49 @@ def stats_forecast(g: pd.DataFrame, horizon: int) -> tuple[float, float]:
     return q50, q90
 
 
+def minmax_levels(g: pd.DataFrame, horizon: int) -> tuple[float, float]:
+    """
+    Расчёт уровней для товара с НЕПРОГНОЗИРУЕМЫМ спросом (класс LUMPY).
+
+    Здесь сознательно НЕ применяется ни модель, ни квантиль высокого
+    порядка. Для редкого хаотичного спроса 90-й перцентиль — это почти
+    всегда редкий крупный всплеск, и закладывать его в запас означает
+    заморозить деньги ради события, которое может не повториться.
+
+    Вместо прогноза используется консервативное правило min/max:
+    медианная потребность считается по фактическому среднему, а верхняя
+    граница ограничена типичным (медианным) размером одной продажи,
+    а не максимальным. Такой товар закупается «под заказ», и задача
+    системы — не угадать спрос, а не дать остатку уйти в ноль незаметно.
+    """
+    g = g.sort_values(DATE)
+    qty = g[QTY].astype(float)
+    if FLAG_CENSORED in g.columns:
+        qty = qty.where(~g[FLAG_CENSORED].astype(bool), np.nan)
+    qty = qty.dropna()
+    if qty.empty:
+        return 0.0, 0.0
+
+    q50 = float(qty.mean()) * horizon
+
+    nonzero = qty[qty > 0]
+    if nonzero.empty:
+        return 0.0, 0.0
+
+    # верхняя граница = средний спрос + ОДНА типичная партия,
+    # а не редкий пиковый всплеск
+    typical_order = float(nonzero.median())
+    q90 = q50 + typical_order
+    return q50, q90
+
+
 def forecast(
     df: pd.DataFrame,
     horizon: int = 30,
     model: QuantileModel | None = None,
     model_dir: str | Path | None = "models/global",
     allow_fine_tune: bool = True,
+    respect_demand_class: bool = True,
     verbose: bool = False,
 ) -> pd.DataFrame:
     """
@@ -94,9 +134,26 @@ def forecast(
               for sku, g in df.groupby(SKU, sort=False)}
 
     # --- раскладываем товары по режимам ------------------------------------
+    # Порядок проверок важен: сначала смотрим на ХАРАКТЕР спроса, и только
+    # потом на длину истории. Товар может иметь три года истории и всё равно
+    # быть непрогнозируемым (продаётся раз в месяц случайными партиями) —
+    # для такого ML-прогноз даст раздутый страховой запас и заморозит деньги.
+    demand_classes: dict[str, str] = {}
     modes: dict[str, str] = {}
     for sku, g in groups.items():
+        cls, _adi, _cv2, _nz = classify_series(
+            g[QTY], g[FLAG_CENSORED] if FLAG_CENSORED in g.columns else None)
+        demand_classes[sku] = cls
+
+        if respect_demand_class and cls in NOT_FORECASTABLE:
+            modes[sku] = MODE_MINMAX
+            continue
+
         m = pick_mode(_history_days(g))
+        if respect_demand_class and cls in STATS_ONLY and m in (
+                MODE_GLOBAL, MODE_FINE_TUNE):
+            # прерывистый спрос: история есть, но ML на ней ненадёжен
+            m = MODE_STATS
         if m in (MODE_GLOBAL, MODE_FINE_TUNE) and model is None:
             m = MODE_STATS
         if m == MODE_FINE_TUNE and not allow_fine_tune:
@@ -163,11 +220,14 @@ def forecast(
 
         if mode == MODE_REJECT:
             q50 = q90 = np.nan
+        elif mode == MODE_MINMAX:
+            q50, q90 = minmax_levels(g, horizon)
         elif mode == MODE_STATS:
             q50, q90 = stats_forecast(g, horizon)
         else:
             q50, q90 = ml_pred[sku]
 
+        cls = demand_classes.get(sku, "")
         out.append({
             "sku": sku,
             "q50": round(q50, 1) if np.isfinite(q50) else np.nan,
@@ -175,6 +235,9 @@ def forecast(
             "daily_q50": round(q50 / horizon, 2) if np.isfinite(q50) else np.nan,
             "mode": mode,
             "mode_label": MODE_LABELS_RU[mode],
+            "demand_class": cls,
+            "demand_class_label": CLASS_LABELS_RU.get(cls, ""),
+            "recommendation": STRATEGY_RU.get(cls, ""),
             "history_days": hist_days,
             "stock": stock,
             "horizon": horizon,
