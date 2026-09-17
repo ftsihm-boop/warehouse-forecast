@@ -29,9 +29,9 @@ import pandas as pd
 
 from .ingest import IngestResult, sku_key
 from .schema import (
-    DATE, FLAG_CENSORED, FLAG_FILLED, FLAG_RETURN, FLAG_WINSORIZED,
+    COST, DATE, FLAG_CENSORED, FLAG_FILLED, FLAG_RETURN, FLAG_WINSORIZED,
     GLOBAL_HISTORY_DAYS, MIN_HISTORY_DAYS, MODE_FINE_TUNE, MODE_GLOBAL,
-    MODE_REJECT, MODE_STATS, QTY, SKU, STATS_HISTORY_DAYS, STOCK,
+    MODE_REJECT, MODE_STATS, PRICE, QTY, SKU, STATS_HISTORY_DAYS, STOCK,
 )
 
 WINSOR_MAD_K = 6.0        # порог выброса: |x - median| > k * MAD
@@ -184,7 +184,10 @@ def clean(ingested: IngestResult, fill_missing_dates: bool = True,
 
     # --- слой 3.5: дубли ----------------------------------------------------
     before = len(df)
-    agg = {QTY: "sum", STOCK: "last", FLAG_RETURN: "max"}
+    # Количество суммируем, остаток берём последний за день, цены —
+    # средние (в течение дня цена могла меняться, например из-за промо).
+    agg = {QTY: "sum", STOCK: "last", FLAG_RETURN: "max",
+           PRICE: "mean", COST: "mean"}
     df = (df.groupby([SKU, DATE], as_index=False)
             .agg({k: v for k, v in agg.items() if k in df.columns}))
     rep.duplicates_merged = before - len(df)
@@ -204,6 +207,11 @@ def clean(ingested: IngestResult, fill_missing_dates: bool = True,
             if STOCK in g.columns:
                 # остаток тянем вперёд: между поставками он меняется плавно
                 g[STOCK] = g[STOCK].ffill()
+            # цены тоже тянем вперёд и назад: в день без продаж цена
+            # в выгрузке отсутствует, но сам товар никуда не делся
+            for col in (PRICE, COST):
+                if col in g.columns:
+                    g[col] = g[col].ffill().bfill()
             if FLAG_RETURN in g.columns:
                 g[FLAG_RETURN] = g[FLAG_RETURN].fillna(False).astype(bool)
         else:

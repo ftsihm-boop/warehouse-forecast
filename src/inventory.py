@@ -96,6 +96,7 @@ def compute_order(
     holding_cost_per_unit_year: float | None = None,
     min_order_qty: float = 0.0,
     order_multiple: float = 1.0,
+    service_factor: float = 1.0,
 ) -> OrderPlan:
     """Считает план закупки по одному товару."""
     q50_horizon = max(float(q50_horizon), 0.0)
@@ -108,10 +109,17 @@ def compute_order(
     demand_lead_q90 = _scale(q90_horizon, horizon_days, lead_time_days)
     demand_cover_q90 = _scale(q90_horizon, horizon_days, cover)
 
-    safety_stock = max(demand_lead_q90 - demand_lead_q50, 0.0)
+    # service_factor масштабирует страховой запас под экономику товара:
+    # у товара с высокой маржой и дешёвым хранением выгодно держать
+    # больше, у скоропорта с копеечной наценкой — меньше. Подбирается
+    # автоматически (см. economics.autotune_service_factor).
+    raw_safety = max(demand_lead_q90 - demand_lead_q50, 0.0)
+    safety_stock = raw_safety * float(service_factor)
     reorder_point = demand_lead_q50 + safety_stock
 
-    need = demand_cover_q90 - stock_val - float(in_transit)
+    demand_cover_q50 = _scale(q50_horizon, horizon_days, cover)
+    cover_safety = max(demand_cover_q90 - demand_cover_q50, 0.0) * float(service_factor)
+    need = demand_cover_q50 + cover_safety - stock_val - float(in_transit)
     recommended = max(need, 0.0)
 
     # EOQ как нижняя граница партии
@@ -171,12 +179,19 @@ def compute_order(
 
 
 def build_order_plan(forecasts: pd.DataFrame, stocks: dict[str, float] | None = None,
-                     horizon_days: int = 30, **kwargs) -> pd.DataFrame:
+                     horizon_days: int = 30,
+                     service_factors: dict[str, float] | None = None,
+                     **kwargs) -> pd.DataFrame:
     """
     forecasts: DataFrame с колонками sku, q50, q90, mode
     stocks:    текущий остаток по каждому SKU (если None — берётся из forecasts.stock)
+    service_factors: множитель страхового запаса по каждому товару.
+               Считается автоматически из экономики товара
+               (см. economics.derive_sku_economics). Если не передан,
+               берётся общий из kwargs или 1.0.
     """
     plans = []
+    default_factor = kwargs.pop("service_factor", 1.0)
     for _, r in forecasts.iterrows():
         sku = r["sku"]
         stock = None
@@ -186,10 +201,16 @@ def build_order_plan(forecasts: pd.DataFrame, stocks: dict[str, float] | None = 
             stock = r["stock"]
         if stock is not None and not np.isfinite(stock):
             stock = None
+
+        factor = default_factor
+        if service_factors:
+            factor = service_factors.get(sku, default_factor)
+
         plans.append(compute_order(
             sku=sku, q50_horizon=r["q50"], q90_horizon=r["q90"],
             horizon_days=horizon_days, stock=stock,
-            mode=r.get("mode", "global"), **kwargs).to_dict())
+            mode=r.get("mode", "global"), service_factor=factor,
+            **kwargs).to_dict())
 
     out = pd.DataFrame(plans)
     if out.empty:

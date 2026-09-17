@@ -55,6 +55,36 @@ class Economics:
     def holding_cost_per_unit_day(self) -> float:
         return self.unit_cost * self.holding_rate_year / 365
 
+    @classmethod
+    def from_data(cls, df: "pd.DataFrame", holding_rate_year: float = 0.35,
+                  order_cost: float = 300.0) -> "Economics":
+        """
+        Строит экономику по ценам из файла пользователя.
+
+        Если цен в файле нет, возвращаются значения по умолчанию —
+        то же, что и раньше, просто теперь это запасной вариант,
+        а не единственный.
+        """
+        from .economics import derive_sku_economics
+        from .schema import QTY, SKU
+
+        if df is None or df.empty:
+            return cls(holding_rate_year=holding_rate_year, order_cost=order_cost)
+
+        eco = derive_sku_economics(df, holding_rate_year=holding_rate_year)
+        if eco.empty or not (eco["source"] == "данные").any():
+            return cls(holding_rate_year=holding_rate_year, order_cost=order_cost)
+
+        # взвешиваем по обороту: экономика ходовых товаров важнее
+        qty = df.groupby(SKU)[QTY].sum().reindex(eco["sku"]).fillna(0.0)
+        w = qty.to_numpy() if qty.sum() > 0 else np.ones(len(eco))
+        cost = float(np.average(eco["unit_cost"], weights=w))
+        price = float(np.average(eco["unit_price"], weights=w))
+        margin = (price - cost) / price if price > 0 else 0.25
+
+        return cls(unit_cost=round(cost, 2), margin=round(margin, 4),
+                   holding_rate_year=holding_rate_year, order_cost=order_cost)
+
 
 @dataclass
 class PolicyResult:
@@ -129,6 +159,7 @@ def backtest_sku(
     test_days: int = 180,
     econ: Economics | None = None,
     safety_factor_baseline: float = 1.25,
+    service_factor: float = 1.0,
 ) -> dict:
     """Бэктест по одному товару: базовая политика против нашей."""
     econ = econ or Economics()
@@ -150,23 +181,32 @@ def backtest_sku(
         target = avg * cover * safety_factor_baseline
         return max(target - stock - in_transit, 0.0)
 
-    # --- наша политика: прогноз q90 на срок покрытия -----------------------
+    # --- наша политика: прогноз q50 + страховой запас на срок покрытия ------
     # предрасчёт: прогноз пересматриваем раз в review_period дней,
     # каждый раз только по данным ДО текущего дня (walk-forward)
+    #
+    # service_factor масштабирует ИМЕННО страховой запас (q90 - q50),
+    # не трогая медианный прогноз. 1.0 — полный страховой запас под
+    # 90% уровень сервиса; 0.5 — половина (меньше запас, чуть больше
+    # риск дефицита); 1.5 — перестраховка. Это единственная ручка,
+    # которой настраивается баланс «замороженные деньги / упущенные продажи».
     ml_cover: dict[int, float] = {}
     for t in range(0, test_days, review_period):
         hist = g.iloc[:split + t]
+        lo_v = hi_v = None
         if model is not None and len(hist) >= 90:
             rows = inference_rows(hist, cover)
             rows = rows[rows[BASE_COL].notna() & (rows[BASE_COL] > 0)]
             if len(rows):
                 feats = [c for c in (model.features or FEATURE_COLUMNS)
                          if c in rows.columns]
-                _, hi = model.predict(rows[feats].fillna(0.0))
-                ml_cover[t] = float(hi[0] * rows[BASE_COL].iloc[0] * cover)
-                continue
-        _, hi = stats_forecast(hist, cover)
-        ml_cover[t] = hi
+                lo, hi = model.predict(rows[feats].fillna(0.0))
+                scale = float(rows[BASE_COL].iloc[0]) * cover
+                lo_v, hi_v = float(lo[0] * scale), float(hi[0] * scale)
+        if lo_v is None:
+            lo_v, hi_v = stats_forecast(hist, cover)
+        safety = max(hi_v - lo_v, 0.0) * service_factor
+        ml_cover[t] = lo_v + safety
 
     def ml_order(t, stock, in_transit):
         key = (t // review_period) * review_period

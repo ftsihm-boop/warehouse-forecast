@@ -19,6 +19,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.backtest import Economics, backtest  # noqa: E402
 from src.cleaning import load_and_clean  # noqa: E402
 from src.demand_classes import profile_all, summary_text  # noqa: E402
+from src.economics import (  # noqa: E402
+    autotune_service_factor, derive_sku_economics,
+    summary_text as economics_summary,
+)
 from src.evaluate import evaluate_baselines  # noqa: E402
 from src.forecast import forecast, forecast_curve  # noqa: E402
 from src.inventory import build_order_plan  # noqa: E402
@@ -105,10 +109,35 @@ def main() -> None:
     print(fc[["sku", "q50", "q90", "daily_q50", "mode_label",
               "history_days", "stock"]].to_string(index=False))
 
+    # --- 4б. экономика и автонастройка --------------------------------------
+    header("ШАГ 4б. ЭКОНОМИКА И АВТОНАСТРОЙКА ЗАПАСА")
+    print(economics_summary(df, holding_rate_year=0.35,
+                            cover_days=a.lead_time + 7))
+    econ = Economics.from_data(df)
+    print(f"\nПараметры для расчёта эффекта: закупка {econ.unit_cost:.2f} ₽, "
+          f"наценка {econ.margin:.1%}")
+
+    print("\nПодбор множителя страхового запаса на ваших данных...")
+    tuned = autotune_service_factor(df, model, econ=econ, verbose=True)
+    factor = tuned["service_factor"]
+    print(f"\n  теоретический оптимум (модель газетчика): × {tuned['theoretical']}")
+    print(f"  выбрано после проверки на истории:        × {factor}")
+    if tuned.get("best_effect_per_month") is not None:
+        print(f"  ожидаемый эффект:                          "
+              f"{tuned['best_effect_per_month']} ₽/мес")
+
+    # множитель по каждому товару — из его собственной экономики
+    eco_table = derive_sku_economics(df, holding_rate_year=econ.holding_rate_year,
+                                     cover_days=a.lead_time + 7)
+    scale = factor / max(tuned["theoretical"], 1e-6)
+    per_sku_factors = {r["sku"]: r["service_factor"] * scale
+                       for _, r in eco_table.iterrows()} if not eco_table.empty else None
+
     # --- 5. план закупки ----------------------------------------------------
     header("ШАГ 5. ПЛАН ЗАКУПКИ")
     plan = build_order_plan(fc, horizon_days=a.horizon,
-                            lead_time_days=a.lead_time, review_period_days=7)
+                            lead_time_days=a.lead_time, review_period_days=7,
+                            service_factors=per_sku_factors)
     cols = ["sku", "stock", "forecast_horizon_q50", "safety_stock",
             "reorder_point", "recommended_order", "days_of_supply",
             "stockout_date", "status_label"]
@@ -122,11 +151,12 @@ def main() -> None:
 
     # --- 7. бэктест ---------------------------------------------------------
     header("ШАГ 7. БЭКТЕСТ: РУЧНОЕ ПЛАНИРОВАНИЕ ПРОТИВ ML")
-    econ = Economics()
     print(f"Допущения: закупочная цена {econ.unit_cost} ₽, наценка "
-          f"{econ.margin:.0%}, хранение {econ.holding_rate_year:.0%} годовых, "
+          f"{econ.margin:.1%}, хранение {econ.holding_rate_year:.0%} годовых, "
           f"размещение заказа {econ.order_cost} ₽")
+    print(f"Страховой запас: × {factor} (подобран автоматически)")
     table, summary = backtest(df, model, econ=econ, test_days=180,
+                              service_factor=factor,
                               horizon=a.horizon, lead_time=a.lead_time,
                               review_period=7)
     if table.empty:

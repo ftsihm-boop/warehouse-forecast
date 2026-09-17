@@ -23,7 +23,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .schema import COLUMN_SYNONYMS, DATE, QTY, REQUIRED_COLUMNS, SKU, STOCK
+from .schema import (
+    COLUMN_SYNONYMS, COST, DATE, PRICE, QTY, REQUIRED_COLUMNS, SKU, STOCK,
+)
 
 HEADER_SCAN_ROWS = 20  # сколько верхних строк просматриваем в поисках шапки
 
@@ -308,6 +310,24 @@ def read_table(source: str | Path | bytes, filename: str | None = None) -> Inges
         out[STOCK] = np.nan
         notes.append("Колонка с остатком не найдена — расчёт заказа будет "
                      "показывать потребность без вычета текущего запаса.")
+
+    # Цены необязательны, но если они есть — экономический расчёт будет
+    # считаться по реальным цифрам магазина, а не по усреднённым допущениям.
+    for col, human in ((PRICE, "цена продажи"), (COST, "закупочная цена")):
+        if col in out.columns:
+            out[col] = out[col].map(parse_number)
+        else:
+            out[col] = np.nan
+
+    if PRICE in mapping and COST in mapping:
+        notes.append("Найдены цена продажи и закупочная цена — "
+                     "экономический эффект будет посчитан по вашим цифрам.")
+    elif PRICE in mapping:
+        notes.append("Найдена цена продажи. Закупочную цену добавьте "
+                     "в выгрузку, чтобы расчёт эффекта был точным.")
+    elif COST in mapping:
+        notes.append("Найдена закупочная цена. Цену продажи добавьте "
+                     "в выгрузку, чтобы расчёт эффекта был точным.")
 
     out[DATE] = pd.to_datetime(out[DATE], errors="coerce")
 

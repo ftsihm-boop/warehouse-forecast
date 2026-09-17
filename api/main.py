@@ -34,6 +34,11 @@ from fastapi.responses import PlainTextResponse
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.cleaning import CleaningReport, clean  # noqa: E402
+from src.backtest import Economics  # noqa: E402
+from src.demand_classes import CLASS_LABELS_RU, profile_all  # noqa: E402
+from src.economics import (  # noqa: E402
+    autotune_service_factor, derive_sku_economics, portfolio_economics,
+)
 from src.forecast import forecast, forecast_curve  # noqa: E402
 from src.ingest import IngestError, read_table  # noqa: E402
 from src.inventory import build_order_plan  # noqa: E402
@@ -180,18 +185,37 @@ def order_plan(
     holding_cost_per_unit_year: float | None = Query(None),
     min_order_qty: float = Query(0.0, ge=0),
     order_multiple: float = Query(1.0, gt=0),
+    auto_economics: bool = Query(True),
 ) -> dict:
     s = _session(session_id)
     fc = forecast(s.df, horizon=horizon, model=MODEL, model_dir=None)
+
+    # Страховой запас по каждому товару считается из его собственной
+    # экономики: цены берутся из загруженного файла, если они там есть.
+    factors = None
+    eco_info: dict = {}
+    if auto_economics:
+        eco = derive_sku_economics(s.df, cover_days=lead_time_days + review_period_days)
+        if not eco.empty:
+            factors = dict(zip(eco["sku"], eco["service_factor"]))
+            from_data = int((eco["source"] == "данные").sum())
+            eco_info = {
+                "prices_from_file": from_data,
+                "prices_estimated": int(len(eco) - from_data),
+                "avg_service_level": round(float(eco["service_level"].mean()), 3),
+            }
+
     plan = build_order_plan(
         fc, horizon_days=horizon, lead_time_days=lead_time_days,
         review_period_days=review_period_days, order_cost=order_cost,
         holding_cost_per_unit_year=holding_cost_per_unit_year,
         min_order_qty=min_order_qty, order_multiple=order_multiple,
+        service_factors=factors,
     )
     counts = plan["status"].value_counts().to_dict() if not plan.empty else {}
     return {"horizon": horizon, "lead_time_days": lead_time_days,
-            "status_counts": counts, "items": _jsonable(plan)}
+            "status_counts": counts, "economics": eco_info,
+            "items": _jsonable(plan)}
 
 
 @app.get("/history")
@@ -212,3 +236,68 @@ def history(session_id: str, sku: str | None = None,
 @app.get("/skus")
 def skus(session_id: str) -> dict:
     return {"items": _session(session_id).report.per_sku}
+
+
+@app.get("/economics")
+def economics(session_id: str,
+              lead_time_days: int = Query(7, ge=1, le=90),
+              review_period_days: int = Query(7, ge=1, le=90),
+              holding_rate_year: float = Query(0.35, gt=0, le=3.0),
+              autotune: bool = Query(False)) -> dict:
+    """
+    Экономика по данным пользователя и автонастройка страхового запаса.
+
+    Цены берутся из загруженного файла, если они там есть. Уровень
+    сервиса по каждому товару считается из его собственной экономики
+    (модель газетчика) — у товара с высокой маржой запас больше.
+
+    autotune=true дополнительно прогоняет короткий бэктест, чтобы
+    уточнить множитель на реальной истории. Это занимает несколько
+    секунд, поэтому по умолчанию выключено.
+    """
+    s = _session(session_id)
+    cover = lead_time_days + review_period_days
+    eco = derive_sku_economics(s.df, holding_rate_year=holding_rate_year,
+                               cover_days=cover)
+    out = {
+        "items": _jsonable(eco),
+        "portfolio": portfolio_economics(s.df, holding_rate_year=holding_rate_year,
+                                         cover_days=cover),
+    }
+    if autotune:
+        econ = Economics.from_data(s.df, holding_rate_year=holding_rate_year)
+        out["autotune"] = autotune_service_factor(
+            s.df, MODEL, econ=econ, lead_time=lead_time_days,
+            review_period=review_period_days)
+    return out
+
+
+@app.get("/demand-classes")
+def demand_classes(session_id: str) -> dict:
+    """
+    Классификация товаров по характеру спроса (методика SBC).
+
+    Интерфейсу это нужно, чтобы показать у каждого товара честную
+    пометку: по нему строится ML-прогноз или он ведётся по правилу
+    min/max, потому что спрос нерегулярный.
+    """
+    s = _session(session_id)
+    profiles = profile_all(s.df)
+    if profiles.empty:
+        return {"items": [], "summary": {}}
+
+    counts = profiles["demand_class"].value_counts().to_dict()
+    n = len(profiles)
+    n_ok = int(profiles["forecastable"].sum())
+    return {
+        "items": _jsonable(profiles),
+        "summary": {
+            "total": n,
+            "forecastable": n_ok,
+            "not_forecastable": n - n_ok,
+            "forecastable_revenue_share": round(
+                float(profiles.loc[profiles["forecastable"], "revenue_share"].sum()), 3),
+            "by_class": counts,
+            "class_labels": CLASS_LABELS_RU,
+        },
+    }
