@@ -43,6 +43,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from src.backtest import economic_impact  # noqa: E402
 from src.cleaning import clean  # noqa: E402
 from src.demand_classes import CLASS_LABELS_RU, profile_all  # noqa: E402
 from src.economics import derive_sku_economics, portfolio_economics  # noqa: E402
@@ -50,6 +51,7 @@ from src.forecast import forecast, forecast_curve  # noqa: E402
 from src.ingest import IngestError, read_table  # noqa: E402
 from src.inventory import build_order_plan  # noqa: E402
 from src.model import QuantileModel  # noqa: E402
+from src.model_fit import adapt_to_data  # noqa: E402
 from src.schema import DATE, QTY, SKU, STOCK  # noqa: E402
 
 WEB_DIR = ROOT / "web"
@@ -115,6 +117,17 @@ class ApiError(Exception):
         self.message = message
 
 
+def _model_for(s: dict) -> QuantileModel | None:
+    """
+    Модель для этой сессии.
+
+    Если при загрузке выяснилось, что глобальная модель плохо подходит
+    к данным пользователя, в сессии лежит дообученная версия — и все
+    расчёты должны идти через неё, иначе адаптация была бы бесполезной.
+    """
+    return s.get("model") or MODEL
+
+
 def _session(sid: str | None) -> dict:
     if not sid:
         raise ApiError(400, "Не передан session_id.")
@@ -149,7 +162,7 @@ def h_history(q) -> dict:
 def h_forecast(q) -> dict:
     s = _session(q.get("session_id", [None])[0])
     horizon = int(q.get("horizon", [30])[0])
-    fc = forecast(s["df"], horizon=horizon, model=MODEL, model_dir=None)
+    fc = forecast(s["df"], horizon=horizon, model=_model_for(s), model_dir=None)
     return {"horizon": horizon, "items": _jsonable(fc)}
 
 
@@ -157,7 +170,7 @@ def h_forecast_curve(q) -> dict:
     s = _session(q.get("session_id", [None])[0])
     sku = q.get("sku", [None])[0]
     horizon = int(q.get("horizon", [30])[0])
-    curve = forecast_curve(s["df"], sku, horizon, model=MODEL, model_dir=None)
+    curve = forecast_curve(s["df"], sku, horizon, model=_model_for(s), model_dir=None)
     if curve.empty:
         raise ApiError(404, f"Прогноз для «{sku}» построить не удалось.")
     curve = curve.assign(date=curve["date"].dt.strftime("%Y-%m-%d"))
@@ -170,7 +183,7 @@ def h_order_plan(q) -> dict:
     lead = int(q.get("lead_time_days", [7])[0])
     review = int(q.get("review_period_days", [7])[0])
 
-    fc = forecast(s["df"], horizon=horizon, model=MODEL, model_dir=None)
+    fc = forecast(s["df"], horizon=horizon, model=_model_for(s), model_dir=None)
 
     # страховой запас по каждому товару — из его собственной экономики
     factors, eco_info = None, {}
@@ -219,6 +232,34 @@ def h_clean_report(q) -> dict:
     return _jsonable(_session(q.get("session_id", [None])[0])["report"].to_dict())
 
 
+def h_economic_impact(q) -> dict:
+    """
+    Экономический эффект: снижение затрат на хранение и предотвращённые
+    потери от дефицита. Считается бэктестом, поэтому занимает секунды —
+    интерфейс вызывает это по кнопке, а не при загрузке файла.
+    Результат кэшируется в сессии: повторный запрос мгновенный.
+    """
+    s = _session(q.get("session_id", [None])[0])
+    lead = int(q.get("lead_time_days", [7])[0])
+    review = int(q.get("review_period_days", [7])[0])
+
+    # scope: сколько самых оборотистых товаров брать. "all" — все,
+    # у кого хватает истории.
+    raw_scope = (q.get("scope", ["10"])[0] or "10").lower()
+    scope = None if raw_scope in ("all", "все", "0") else max(1, int(raw_scope))
+
+    key = f"impact_{lead}_{review}_{raw_scope}"
+    if key in s:
+        return s[key]
+
+    out = _jsonable(economic_impact(s["df"], _model_for(s), max_skus=scope,
+                                    lead_time=lead, review_period=review))
+    s[key] = out
+    # сохраняем последний расчёт, чтобы он попал в текстовый отчёт
+    s["last_impact"] = out
+    return out
+
+
 ROUTES = {
     "/health": h_health,
     "/history": h_history,
@@ -228,12 +269,68 @@ ROUTES = {
     "/demand-classes": h_demand_classes,
     "/economics": h_economics,
     "/clean-report": h_clean_report,
+    "/economic-impact": h_economic_impact,
 }
 
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
                 ".js": "application/javascript; charset=utf-8",
                 ".json": "application/json; charset=utf-8",
                 ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon"}
+
+
+def _impact_to_text(d: dict) -> str:
+    """Экономический эффект в том же текстовом виде, что и отчёт об очистке."""
+    def pct(v):
+        return "н/д" if v is None else f"{v:.1f} %"
+
+    def money(v):
+        return f"{v:,.0f} \u20BD".replace(",", " ")
+
+    L = [
+        "ЭКОНОМИЧЕСКИЙ ЭФФЕКТ",
+        "=" * 52,
+        f"Охват расчёта:                  {d.get('skus_analyzed')} товар(ов) "
+        f"из {d.get('skus_total_eligible')} пригодных",
+        f"Период бэктеста:                {d.get('period_days')} дней",
+        "-" * 52,
+        "ЗАТРАТЫ НА ХРАНЕНИЕ",
+        f"  было (ручное планирование):   {money(d.get('holding_before', 0))}",
+        f"  стало (система):              {money(d.get('holding_after', 0))}",
+        f"  снижение:                     {pct(d.get('holding_saved_pct'))}",
+        "",
+        "ПОТЕРИ ОТ ДЕФИЦИТА (упущенная выручка)",
+        f"  было:                         {money(d.get('lost_before', 0))}",
+        f"  стало:                        {money(d.get('lost_after', 0))}",
+        f"  предотвращено:                {money(d.get('lost_prevented', 0))} "
+        f"({pct(d.get('lost_prevented_pct'))})",
+        "",
+        "ТОВАРНЫЙ ОСТАТОК (замороженные средства)",
+        f"  было:                         {money(d.get('stock_before', 0))}",
+        f"  стало:                        {money(d.get('stock_after', 0))}",
+        f"  снижение:                     {pct(d.get('stock_reduced_pct'))}",
+        "-" * 52,
+        f"СОВОКУПНЫЙ ЭФФЕКТ ЗА ПЕРИОД:    {money(d.get('total_effect_period', 0))}",
+        f"ЭФФЕКТ В МЕСЯЦ:                 {money(d.get('effect_per_month', 0))}",
+        "-" * 52,
+        "ДОПУЩЕНИЯ РАСЧЁТА",
+        f"  закупочная цена:              {money(d.get('unit_cost', 0))}",
+        f"  наценка:                      {d.get('margin', 0) * 100:.1f} %",
+        f"  страховой запас:              \u00d7 {d.get('service_factor')}"
+        + (f" (теоретический оптимум \u00d7 {d.get('theoretical_factor')})"
+           if d.get("theoretical_factor") else ""),
+        "",
+        "  Метод: история прогнана дважды — как если бы закупками управляли",
+        "  вручную (средний спрос за 28 дней с запасом прочности 1.25) и как",
+        "  это делает система (прогноз модели + страховой запас по",
+        "  доверительному интервалу). Разница между политиками и есть эффект.",
+    ]
+
+    diag = d.get("diagnosis") or {}
+    if diag.get("notes"):
+        L += ["-" * 52, "ЗАМЕЧАНИЯ:"]
+        for n in diag["notes"]:
+            L.append("  ! " + n)
+    return "\n".join(L)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -280,7 +377,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/clean-report/text":
             try:
                 s = _session(q.get("session_id", [None])[0])
-                self._text(s["report"].to_text())
+                text = s["report"].to_text()
+                # если эффект уже считали — он идёт в тот же отчёт,
+                # чтобы выгрузка была цельной и её можно было приложить
+                # к пояснительной записке как есть
+                impact = s.get("last_impact")
+                if impact and not impact.get("error"):
+                    text += "\n\n" + _impact_to_text(impact)
+                self._text(text)
             except ApiError as e:
                 self._text(e.message, e.status)
             return
@@ -364,15 +468,32 @@ class Handler(BaseHTTPRequestHandler):
         if df.empty:
             raise ApiError(422, "После очистки не осталось пригодных данных.")
 
+        # Проверяем, подходит ли модель к этим данным, и при
+        # необходимости дообучаем её прямо сейчас. Так пользователь
+        # получает прогноз, настроенный под его ассортимент, а не
+        # усреднённый по чужому.
+        session_model, fit = None, None
+        if MODEL is not None:
+            try:
+                session_model, fit_report = adapt_to_data(df, MODEL)
+                fit = fit_report.to_dict()
+                if fit_report.action != "fine_tuned":
+                    session_model = None      # осталась глобальная
+                print(f"  проверка модели: {fit_report.message}")
+            except Exception as e:  # noqa: BLE001
+                print(f"  проверка модели не удалась: {e}")
+
         _gc_sessions()
         sid = uuid.uuid4().hex
         with SESSION_LOCK:
             SESSIONS[sid] = {"df": df, "report": report,
+                             "model": session_model, "fit": fit,
                              "created": datetime.utcnow()}
 
         self._json({"session_id": sid, "filename": filename,
                     "columns_detected": ingested.mapping,
-                    "report": _jsonable(report.to_dict())})
+                    "report": _jsonable(report.to_dict()),
+                    "model_fit": _jsonable(fit) if fit else None})
 
 
 def main() -> None:

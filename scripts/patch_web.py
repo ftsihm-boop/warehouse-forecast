@@ -43,6 +43,7 @@ STATE_CODE = '''  var viewMode = "single"; // "single" | "all"
   var serverStats = {};        // sku -> строка плана закупки с сервера
   var serverMeta = {};         // sku -> режим прогноза и класс спроса
   var cleaningReport = null;   // отчёт об очистке данных
+  var modelFit = null;         // проверка модели на данных пользователя
   var usingServer = false;     // работаем от модели или считаем локально
 '''
 
@@ -72,6 +73,7 @@ CLIENT_CODE = '''  /* === API-INTEGRATION === */
     var out = await res.json();
     sessionId = out.session_id;
     cleaningReport = out.report;
+    modelFit = out.model_fit || null;
     return true;
   }
 
@@ -259,7 +261,18 @@ PANEL_CODE = '''  /* === API-INTEGRATION === */
     if (state === "connecting") {
       el.textContent = "Подключаюсь к модели...";
     } else if (state === "online") {
-      el.textContent = "Прогноз строит обученная модель";
+      // Если модель дообучилась под эти данные — об этом стоит сказать:
+      // пользователь видит, что система подстроилась, а не работает
+      // усреднённым прогнозом по чужому ассортименту.
+      if (modelFit && modelFit.action === "fine_tuned") {
+        el.textContent = "Модель дообучена под ваши данные";
+      } else if (modelFit && modelFit.checked && !modelFit.suitable) {
+        el.className = "server-status warn";
+        el.textContent = "Модель слабо подходит к этим данным — "
+          + "обучите её на этом файле";
+      } else {
+        el.textContent = "Прогноз строит обученная модель";
+      }
     } else {
       el.textContent = "Модель недоступна — расчёт по простой формуле"
         + (detail ? " (" + detail + ")" : "");
@@ -299,6 +312,7 @@ PANEL_CODE = '''  /* === API-INTEGRATION === */
 
     toggleLocalOnlyControls();
     updateFootnote();
+    renderImpactPanel();
 
     if (!usingServer || !cleaningReport) {
       panel.style.display = "none";
@@ -324,6 +338,13 @@ PANEL_CODE = '''  /* === API-INTEGRATION === */
     });
     html += '</div>';
 
+    if (modelFit && modelFit.message) {
+      var cls = modelFit.action === "fine_tuned" ? "fit-tuned"
+              : (modelFit.suitable ? "fit-ok" : "fit-warn");
+      html += '<div class="model-fit ' + cls + '">'
+        + escapeHtml(modelFit.message) + '</div>';
+    }
+
     if (r.warnings && r.warnings.length) {
       html += '<ul class="clean-warn">';
       r.warnings.forEach(function (w) {
@@ -338,6 +359,101 @@ PANEL_CODE = '''  /* === API-INTEGRATION === */
     }
     panel.innerHTML = html;
     panel.style.display = "block";
+  }
+
+  // Экономический эффект: снижение затрат на хранение и предотвращённые
+  // потери от дефицита. Считается бэктестом на истории, это занимает
+  // около полуминуты, поэтому запускается по кнопке, а не автоматически.
+  async function loadEconomicImpact() {
+    var panel = document.getElementById("impact-body");
+    if (!panel || !sessionId) return;
+
+    var sel = document.getElementById("impact-scope");
+    var wide = sel && (sel.value === "all" || parseInt(sel.value, 10) > 10);
+    panel.innerHTML = '<div class="impact-loading">Считаю эффект на вашей '
+      + 'истории продаж' + (wide ? ' по расширенному охвату — это может занять '
+      + 'минуту и дольше' : ' — это занимает около 30 секунд') + '...</div>';
+
+    try {
+      var scopeSel = document.getElementById("impact-scope");
+      var scope = scopeSel ? scopeSel.value : "10";
+      var res = await fetch(apiUrl("/economic-impact", {
+        session_id: sessionId, lead_time_days: leadTimeDays, scope: scope
+      }));
+      if (!res.ok) throw new Error("Сервер вернул " + res.status);
+      var d = await res.json();
+      if (d.error) { panel.innerHTML = '<div class="impact-loading">' + escapeHtml(d.error) + '</div>'; return; }
+
+      var pctText = function (v) {
+        return (v === null || v === undefined) ? "—" : fmt(v, 1) + " %";
+      };
+      var money = function (v) { return fmt(v, 0) + " \\u20BD"; };
+
+      var html = '<div class="impact-cards">';
+      html += '<div class="impact-card good">'
+        + '<div class="ic-num">' + pctText(d.holding_saved_pct) + '</div>'
+        + '<div class="ic-lab">снижение затрат на хранение</div>'
+        + '<div class="ic-sub">' + money(d.holding_before) + ' → '
+        + money(d.holding_after) + '</div></div>';
+
+      html += '<div class="impact-card good">'
+        + '<div class="ic-num">' + pctText(d.lost_prevented_pct) + '</div>'
+        + '<div class="ic-lab">предотвращённые потери от дефицита</div>'
+        + '<div class="ic-sub">' + money(d.lost_before) + ' → '
+        + money(d.lost_after) + '</div></div>';
+
+      html += '<div class="impact-card">'
+        + '<div class="ic-num">' + pctText(d.stock_reduced_pct) + '</div>'
+        + '<div class="ic-lab">снижение товарного остатка</div>'
+        + '<div class="ic-sub">' + money(d.stock_before) + ' → '
+        + money(d.stock_after) + '</div></div>';
+
+      html += '<div class="impact-card accent">'
+        + '<div class="ic-num">' + money(d.effect_per_month) + '</div>'
+        + '<div class="ic-lab">совокупный эффект в месяц</div>'
+        + '<div class="ic-sub">за период ' + money(d.total_effect_period) + '</div></div>';
+      html += '</div>';
+
+      var diag = d.diagnosis || {};
+      if (diag.notes && diag.notes.length) {
+        html += '<div class="impact-diag ' + (diag.level || 'ok') + '">';
+        diag.notes.forEach(function (n) {
+          html += '<div class="diag-line">' + escapeHtml(n) + '</div>';
+        });
+        html += '</div>';
+      }
+
+      html += '<p class="impact-note">Расчёт сделан бэктестом: по '
+        + d.skus_analyzed + ' товарам из ' + d.skus_total_eligible
+        + ' пригодных, за последние '
+        + d.period_days + ' дней история прогнана дважды — как если бы '
+        + 'закупками управляли вручную (средний спрос с запасом прочности) '
+        + 'и как это делает система. Закупочная цена ' + money(d.unit_cost)
+        + ', наценка ' + fmt(d.margin * 100, 1) + ' % — '
+        + (d.prices_from_file === 0 ? 'оценка' : 'из вашего файла') + '. '
+        + 'Страховой запас × ' + d.service_factor
+        + (d.theoretical_factor ? ' (теоретический оптимум × ' + d.theoretical_factor + ')' : '')
+        + '.</p>';
+
+      panel.innerHTML = html;
+    } catch (e) {
+      panel.innerHTML = '<div class="impact-loading">Не удалось рассчитать: '
+        + escapeHtml(e.message) + '</div>';
+    }
+  }
+
+  function renderImpactPanel() {
+    var panel = document.getElementById("impact-panel");
+    if (!panel) return;
+    panel.style.display = usingServer ? "block" : "none";
+    var btn = document.getElementById("impact-btn");
+    if (btn && !btn.dataset.bound) {
+      btn.dataset.bound = "1";
+      btn.addEventListener("click", function () {
+        btn.disabled = true;
+        loadEconomicImpact().finally(function () { btn.disabled = false; });
+      });
+    }
   }
 
   function modeBadge(sku) {
@@ -358,6 +474,31 @@ PANEL_CODE = '''  /* === API-INTEGRATION === */
 # --- 6. Бейдж в таблицу -------------------------------------------------------
 TABLE_OLD = '''        "<td>" + escapeHtml(r.sku) + "</td>" +'''
 TABLE_NEW = '''        "<td>" + escapeHtml(r.sku) + modeBadge(r.sku) + "</td>" +'''
+
+# --- 6в. Подсказка про средний спрос ------------------------------------------
+# У серверного расчёта нет понятия «последние N дней»: модель смотрит
+# на всю историю и взвешивает её сама. Старый текст подставлял туда null.
+TOOLTIP_OLD = '''      var avgTooltip = tf("avgTooltip", { days: r.stats.spanDays, avg: fmt(r.stats.avgDaily, 1) });'''
+TOOLTIP_NEW = '''      /* === API-INTEGRATION === */
+      var avgTooltip;
+      if (usingServer && r.stats.spanDays === null) {
+        avgTooltip = "Средний дневной спрос по прогнозу модели: "
+          + fmt(r.stats.avgDaily, 1) + " шт/день."
+          + (r.stats.forecastHigh
+              ? " Прогноз на горизонт: " + fmt(r.stats.forecastHorizon, 0)
+                + " шт, верхняя граница " + fmt(r.stats.forecastHigh, 0) + " шт."
+              : "")
+          + (r.stats.note ? " " + r.stats.note : "");
+      } else {
+        avgTooltip = tf("avgTooltip", { days: r.stats.spanDays, avg: fmt(r.stats.avgDaily, 1) });
+      }'''
+
+# --- 6г. Симметричные поля у мини-графиков ------------------------------------
+# В компактном режиме подписи оси Y не рисуются (см. `if (!compact)` ниже
+# по коду), поэтому отступ в 30px слева оставался пустым — график
+# выглядел сдвинутым вправо внутри карточки.
+CHARTPAD_OLD = '''      ? { top: 8, right: 6, bottom: 18, left: 30 }'''
+CHARTPAD_NEW = '''      ? { top: 8, right: 8, bottom: 18, left: 8 }'''
 
 # --- 6б. Смена параметров перезапрашивает модель ------------------------------
 HORIZON_OLD = '''  horizonSelect.addEventListener("change", function () {
@@ -393,6 +534,25 @@ HTML_ANCHOR = '''    <div class="stats-row">'''
 HTML_CODE = '''    <!-- === API-INTEGRATION === -->
     <div id="server-status" class="server-status offline"></div>
     <div id="clean-report" class="panel clean-report" style="display:none"></div>
+    <div id="impact-panel" class="panel impact-panel" style="display:none">
+      <div class="impact-head">
+        <div>
+          <div class="impact-title">Экономический эффект</div>
+          <div class="impact-hint">Сравнение с ручным планированием закупок на вашей истории продаж</div>
+        </div>
+        <div class="impact-controls">
+          <label for="impact-scope">По товарам</label>
+          <select id="impact-scope">
+            <option value="10" selected>10 самых оборотистых</option>
+            <option value="25">25 самых оборотистых</option>
+            <option value="50">50 самых оборотистых</option>
+            <option value="all">по всем товарам</option>
+          </select>
+          <button id="impact-btn" class="impact-btn">Рассчитать</button>
+        </div>
+      </div>
+      <div id="impact-body"></div>
+    </div>
 
     <div class="stats-row">'''
 
@@ -408,6 +568,14 @@ CSS_CODE = '''
   .server-status.offline { background: #FBF0E4; color: #8A5A22; }
   .server-status.connecting { background: #EDF1F5; color: #44586B; }
 
+  .server-status.warn { background: #FBF0E4; color: #8A5A22; }
+  .model-fit {
+    margin-top: 12px; padding: 9px 12px; border-radius: 7px;
+    font-size: 12.5px; line-height: 1.5;
+  }
+  .model-fit.fit-ok { background: #EDF5EF; color: #2C5A3C; }
+  .model-fit.fit-tuned { background: #E9F0F5; color: #2B4C63; }
+  .model-fit.fit-warn { background: #FBF3E5; color: #7E5A1E; }
   .clean-report { padding: 16px 18px; margin-bottom: 16px; }
   .clean-head { font-weight: 600; margin-bottom: 12px; color: #2A3B47; }
   .clean-grid { display: flex; flex-wrap: wrap; gap: 22px; }
@@ -423,14 +591,63 @@ CSS_CODE = '''
     color: #35566B;
   }
 
+  /* Бейдж компактный: он добавляется в первую колонку, а таблица
+     и без него занимала почти всю ширину — лишние пиксели тут
+     выталкивают колонку «Статус» за край. */
   .mode-badge {
-    display: inline-block; margin-left: 8px; padding: 2px 7px;
-    border-radius: 4px; font-size: 11px; font-weight: 600;
-    vertical-align: middle; cursor: help;
+    display: inline-block; margin-left: 6px; padding: 1px 5px;
+    border-radius: 4px; font-size: 10px; font-weight: 600;
+    vertical-align: middle; cursor: help; letter-spacing: .1px;
   }
+  /* и слегка поджимаем ячейки, чтобы таблица снова помещалась целиком */
+  tbody td, thead th { padding-left: 11px; padding-right: 11px; }
   .badge-ml { background: #E3EDF3; color: #2F5468; }
   .badge-stats { background: #EDF1F5; color: #5A6B78; }
   .badge-minmax { background: #F6EBDC; color: #8A5A22; }
+
+  .impact-panel { padding: 16px 18px; margin-bottom: 16px; }
+  .impact-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap;
+  }
+  .impact-title { font-weight: 600; color: #2A3B47; }
+  .impact-hint { font-size: 12px; color: #6B7C88; margin-top: 2px; }
+  .impact-btn {
+    padding: 8px 16px; border-radius: 7px; border: 1px solid #35566B;
+    background: #35566B; color: #fff; font-size: 13px; cursor: pointer;
+  }
+  .impact-btn:hover { background: #2A4759; }
+  .impact-btn:disabled { opacity: .55; cursor: default; }
+  .impact-loading { font-size: 13px; color: #6B7C88; padding: 14px 0 4px; }
+  .impact-cards {
+    display: flex; flex-wrap: wrap; gap: 14px; margin-top: 16px;
+  }
+  .impact-card {
+    flex: 1 1 170px; padding: 13px 15px; border-radius: 8px;
+    background: #F4F6F8; border: 1px solid #E3E8EC;
+  }
+  .impact-card.good { background: #EDF5EF; border-color: #D2E5D8; }
+  .impact-card.accent { background: #F7EFE4; border-color: #EBD9C2; }
+  .impact-card .ic-num { font-size: 21px; font-weight: 600; color: #2A3B47; }
+  .impact-card .ic-lab { font-size: 12px; color: #55666F; margin-top: 3px; line-height: 1.35; }
+  .impact-card .ic-sub { font-size: 11px; color: #8394A0; margin-top: 6px; }
+  .impact-controls { display: flex; align-items: center; gap: 10px; }
+  .impact-controls label { font-size: 12px; color: #6B7C88; }
+  .impact-controls select {
+    padding: 7px 9px; border-radius: 7px; border: 1px solid #D3DBE0;
+    font-size: 13px; background: #fff; color: #2A3B47;
+  }
+  .impact-diag {
+    margin-top: 14px; padding: 11px 13px; border-radius: 8px; font-size: 12.5px;
+    line-height: 1.5;
+  }
+  .impact-diag.ok { background: #EDF5EF; color: #2C5A3C; }
+  .impact-diag.warn { background: #FBF3E5; color: #7E5A1E; }
+  .impact-diag.bad { background: #F8ECEA; color: #8A3A2A; }
+  .impact-diag .diag-line + .diag-line { margin-top: 7px; }
+  .impact-note {
+    font-size: 12px; color: #6B7C88; line-height: 1.55; margin: 14px 0 0;
+  }
 </style>'''
 
 
@@ -450,6 +667,8 @@ def apply(text: str) -> tuple[str, list[str]]:
     text = once(text, ROUTE_OLD, ROUTE_NEW, "routeFile")
     text = once(text, PANEL_ANCHOR, PANEL_CODE + PANEL_ANCHOR, "панель отчёта")
     text = once(text, TABLE_OLD, TABLE_NEW, "бейдж режима")
+    text = once(text, TOOLTIP_OLD, TOOLTIP_NEW, "подсказка среднего спроса")
+    text = once(text, CHARTPAD_OLD, CHARTPAD_NEW, "поля мини-графиков")
     text = once(text, HORIZON_OLD, HORIZON_NEW, "перезапрос при смене горизонта")
     text = once(text, LEADTIME_OLD, LEADTIME_NEW, "перезапрос при смене срока поставки")
     text = once(text, HTML_ANCHOR, HTML_CODE, "разметка панели")

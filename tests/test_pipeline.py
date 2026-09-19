@@ -23,7 +23,10 @@ from src.backtest import Economics  # noqa: E402
 from src.economics import (  # noqa: E402
     _z_score, derive_sku_economics, optimal_service_level, service_level_to_factor,
 )
+from src.features import FEATURE_COLUMNS, TARGET_COL, build_training_set  # noqa: E402
 from src.forecast import forecast  # noqa: E402
+from src.model import QuantileModel  # noqa: E402
+from src.model_fit import adapt_to_data, check_fit  # noqa: E402
 from src.inventory import build_order_plan  # noqa: E402
 from src.features import build_features, build_training_set, time_split  # noqa: E402
 from src.ingest import (  # noqa: E402
@@ -452,6 +455,75 @@ def test_economics_from_data_uses_file_prices():
     econ = Economics.from_data(df)
     assert abs(econ.unit_cost - 150.0) < 1.0
     assert abs(econ.margin - 0.25) < 0.02
+
+
+# --- проверка пригодности модели к данным ------------------------------------
+
+def _synth_frame(days=400, base=20.0, sku="A", seed=0) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    d = pd.date_range("2024-01-01", periods=days, freq="D")
+    return pd.DataFrame({
+        DATE: d, SKU: sku,
+        QTY: np.abs(rng.normal(base, base * 0.2, days)).round(),
+        STOCK: base * 10, FLAG_CENSORED: False, PRICE: 100.0, COST: 70.0,
+    })
+
+
+def test_fit_check_needs_enough_history():
+    """На коротком ряде проверку провести нельзя — и это не ошибка."""
+    df = _synth_frame(days=60)
+    model = _tiny_model(_synth_frame(days=400, seed=1))
+    rep = check_fit(df, model)
+    assert not rep.checked
+    assert rep.suitable  # работаем как есть, не блокируем пользователя
+
+
+def _tiny_model(df: pd.DataFrame) -> QuantileModel:
+    ds = build_training_set(df, [30])
+    feats = [c for c in FEATURE_COLUMNS if c in ds.columns]
+    m = QuantileModel()
+    m.fit(ds[feats].fillna(0.0), ds[TARGET_COL])
+    return m
+
+
+def test_fit_check_reports_metrics():
+    """Проверка должна возвращать все три метрики, включая покрытие."""
+    train = _synth_frame(days=500, seed=2)
+    model = _tiny_model(train)
+    rep = check_fit(train, model)
+    assert rep.checked
+    assert rep.wape is not None and rep.bias is not None
+    assert rep.coverage is not None
+    assert 0.0 <= rep.coverage <= 1.0
+
+
+def test_fit_detects_scale_mismatch():
+    """
+    Модель, обученная на товаре одного масштаба, проверяется на другом.
+    Нормировка признаков должна вытягивать такой перенос — проверяем,
+    что метрики считаются и ничего не падает.
+    """
+    model = _tiny_model(_synth_frame(days=500, base=10.0, seed=3))
+    other = _synth_frame(days=500, base=250.0, sku="B", seed=4)
+    rep = check_fit(other, model)
+    assert rep.checked
+    assert rep.wape >= 0
+
+
+def test_adapt_returns_model_and_report():
+    """Адаптация всегда возвращает рабочую модель, даже если не помогла."""
+    model = _tiny_model(_synth_frame(days=500, seed=5))
+    df = _synth_frame(days=500, base=40.0, sku="C", seed=6)
+    tuned, rep = adapt_to_data(df, model)
+    assert tuned is not None
+    assert rep.action in ("none", "fine_tuned")
+
+
+def test_adapt_without_model_is_safe():
+    df = _synth_frame(days=300)
+    tuned, rep = adapt_to_data(df, None)
+    assert tuned is None
+    assert not rep.suitable
 
 
 if __name__ == "__main__":

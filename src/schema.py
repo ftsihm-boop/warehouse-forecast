@@ -61,7 +61,7 @@ COLUMN_SYNONYMS: dict[str, list[str]] = {
     PRICE: [
         "цена", "ценапродажи", "ценареализации", "розничнаяцена",
         "ценарозничная", "продажнаяцена", "price", "sellprice",
-        "sellingprice", "retailprice", "unitprice", "итемприце",
+        "sellingprice", "retailprice", "unitprice", "itemprice",
         "ценазаединицу", "стоимость", "ценапродажиединицы",
     ],
     COST: [

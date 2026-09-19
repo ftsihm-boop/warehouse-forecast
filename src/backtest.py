@@ -303,3 +303,171 @@ def backtest(df: pd.DataFrame, model: QuantileModel | None = None,
         "Эффект в месяц, ₽": round((b["total_cost"] - m["total_cost"]) / days * 30),
     }
     return table, summary
+
+
+def economic_impact(
+    df: pd.DataFrame,
+    model: QuantileModel | None = None,
+    econ: Economics | None = None,
+    service_factor: float | None = None,
+    max_skus: int | None = 10,
+    test_days: int = 90,
+    lead_time: int = 7,
+    review_period: int = 7,
+    tune_skus: int = 10,
+) -> dict:
+    """
+    Экономический эффект для показа в интерфейсе.
+
+    max_skus — по скольким самым оборотистым товарам считать эффект.
+    None означает «по всем, у кого хватает истории»: цифра получается
+    полной, но ждать дольше.
+
+    Подбор страхового запаса при этом всегда идёт на ограниченной
+    подвыборке (tune_skus): коэффициент общий для всего ассортимента,
+    и гонять ради него сотню товаров смысла нет, а вот сам эффект
+    считается уже по всему заданному охвату.
+
+    Возвращает готовые к показу показатели: снижение затрат на
+    хранение и предотвращённые потери от упущенной выручки —
+    ровно то, что требует экономическое обоснование проекта.
+    """
+    from .economics import autotune_service_factor
+
+    if df is None or df.empty:
+        return {}
+
+    econ = econ or Economics.from_data(df)
+
+    # берём самые оборотистые товары с достаточной историей
+    per_sku = df.groupby(SKU).agg(total=(QTY, "sum"), n=(QTY, "size"))
+    eligible = per_sku[per_sku["n"] >= test_days + 90]
+    if eligible.empty:
+        return {"error": "Для расчёта эффекта нужно минимум "
+                         f"{test_days + 90} дней истории по товару."}
+
+    ranked = eligible.sort_values("total", ascending=False)
+    top = ranked.index if max_skus is None else ranked.head(max_skus).index
+    sample = df[df[SKU].isin(top)]
+
+    # Подбор коэффициента — на подвыборке, эффект — на полном охвате.
+    # Коэффициент общий для всего ассортимента, поэтому его достаточно
+    # настроить на самых оборотистых позициях; гонять ради него сотню
+    # товаров означало бы ждать минуты вместо секунд.
+    tune_top = ranked.head(min(tune_skus, len(ranked))).index
+    tune_sample = df[df[SKU].isin(tune_top)]
+
+    summary = None
+    if service_factor is None:
+        tuned = autotune_service_factor(tune_sample, model, econ=econ,
+                                        max_skus=tune_skus, test_days=test_days,
+                                        lead_time=lead_time,
+                                        review_period=review_period)
+        service_factor = tuned.get("service_factor", 1.0)
+        theoretical = tuned.get("theoretical")
+        # если охват совпал с выборкой подбора, бэктест уже посчитан
+        if len(tune_top) == len(top):
+            summary = tuned.get("best_summary")
+    else:
+        theoretical = None
+
+    if not summary:
+        _table, summary = backtest(sample, model, econ=econ, test_days=test_days,
+                                   horizon=30, lead_time=lead_time,
+                                   review_period=review_period,
+                                   service_factor=service_factor)
+    if not summary:
+        return {"error": "Не удалось рассчитать эффект на этих данных."}
+
+    holding_before = summary["Затраты на хранение as-is, ₽"]
+    holding_after = summary["Затраты на хранение to-be, ₽"]
+    lost_before = summary["Упущенная выручка as-is, ₽"]
+    lost_after = summary["Упущенная выручка to-be, ₽"]
+
+    def pct(before: float, after: float) -> float | None:
+        if before < 100:          # база слишком мала, процент бессмыслен
+            return None
+        return round((1 - after / before) * 100, 1)
+
+    return {
+        "period_days": test_days,
+        "skus_analyzed": summary.get("Товаров в расчёте эффекта", 0),
+        "service_factor": round(float(service_factor), 2),
+        "theoretical_factor": theoretical,
+        "unit_cost": econ.unit_cost,
+        "margin": round(econ.margin, 4),
+
+        "holding_before": holding_before,
+        "holding_after": holding_after,
+        "holding_saved_pct": pct(holding_before, holding_after),
+
+        "stock_before": summary["Средний остаток as-is, ₽"],
+        "stock_after": summary["Средний остаток to-be, ₽"],
+        "stock_reduced_pct": summary["Снижение остатка, %"],
+
+        "lost_before": lost_before,
+        "lost_after": lost_after,
+        "lost_prevented": round(lost_before - lost_after),
+        "lost_prevented_pct": pct(lost_before, lost_after),
+
+        "total_effect_period": summary["Совокупный эффект за период, ₽"],
+        "effect_per_month": summary["Эффект в месяц, ₽"],
+        "skus_total_eligible": int(len(ranked)),
+        "diagnosis": _diagnose(summary, service_factor, theoretical),
+    }
+
+
+def _diagnose(summary: dict, factor: float, theoretical: float | None) -> dict:
+    """
+    Объясняет, почему эффект получился таким.
+
+    Низкий эффект сам по себе ничего не говорит — важно, из-за чего он
+    низкий. Чаще всего причина одна: модель обучали не на этих данных,
+    её прогноз смещён, и системе приходится компенсировать это раздутым
+    страховым запасом. Держать лишний запас стоит денег, поэтому вся
+    выгода уходит на его оплату. Лечится переобучением на своём файле.
+    """
+    effect = summary.get("Эффект в месяц, ₽", 0)
+    lost_after = summary.get("Упущенная выручка to-be, ₽", 0)
+    lost_before = summary.get("Упущенная выручка as-is, ₽", 0)
+
+    notes: list[str] = []
+    level = "ok"
+
+    # Коэффициент сильно выше теоретического — признак смещённого прогноза
+    if theoretical and factor > theoretical * 1.6:
+        level = "warn"
+        notes.append(
+            "Страховой запас пришлось поднять существенно выше расчётного "
+            "(× {:.2f} против × {:.2f}). Так бывает, когда модель обучена "
+            "на другом ассортименте и занижает спрос по вашим товарам. "
+            "Переобучите её на этом же файле — эффект заметно вырастет."
+            .format(factor, theoretical))
+
+    if lost_after > max(lost_before * 1.05, 100):
+        level = "warn"
+        notes.append(
+            "Дефицит у системы получился выше, чем при ручном планировании. "
+            "Это тоже указывает на смещённый прогноз: модель недооценивает "
+            "спрос, и запаса не хватает.")
+
+    if effect <= 0:
+        level = "bad"
+        notes.append(
+            "На этих данных система пока не выигрывает у ручного "
+            "планирования. Главное, что стоит сделать, — обучить модель "
+            "на этом файле.")
+    elif effect < 500:
+        if level == "ok":
+            level = "warn"
+        notes.append(
+            "Эффект небольшой. Проверьте, что модель обучена на этих же "
+            "данных, и что закупочные цены в файле реальные — от них "
+            "напрямую зависит расчёт.")
+
+    if not notes:
+        notes.append(
+            "Система устойчиво выигрывает у ручного планирования: "
+            "запас меньше, дефицита не больше.")
+
+    return {"level": level, "notes": notes}

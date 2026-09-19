@@ -74,7 +74,7 @@ TRAINED_QUANTILE = 0.9
 # Разумные границы множителя: без ограничения при экстремальной экономике
 # формула может потребовать запас на годы вперёд или вовсе его обнулить.
 MIN_SERVICE_FACTOR = 0.3
-MAX_SERVICE_FACTOR = 2.5
+MAX_SERVICE_FACTOR = 4.0
 
 # Граничные уровни сервиса — тоже страховка от вырожденных случаев
 MIN_SERVICE_LEVEL = 0.55
@@ -315,8 +315,16 @@ def autotune_service_factor(
         theoretical = float(np.average(eco["service_factor"], weights=w))
 
     # --- сетка вокруг теоретической точки ----------------------------------
-    grid = sorted({round(max(MIN_SERVICE_FACTOR, min(MAX_SERVICE_FACTOR, v)), 2)
-                   for v in (theoretical * m for m in (0.3, 0.45, 0.6, 0.8, 1.0, 1.25))})
+    # Диапазон намеренно широкий и несимметричный: вверх нужно больше
+    # запаса, чем вниз. Если модель на этих данных систематически
+    # занижает спрос (так бывает, когда её обучали на другом
+    # ассортименте), компенсировать это можно только увеличенным
+    # страховым запасом — и поиск обязан дотянуться до такого значения.
+    def clamp(v: float) -> float:
+        return round(max(MIN_SERVICE_FACTOR, min(MAX_SERVICE_FACTOR, v)), 2)
+
+    grid = sorted({clamp(theoretical * m)
+                   for m in (0.3, 0.5, 0.75, 1.0, 1.3, 1.7, 2.2)})
 
     # --- подвыборка: самые оборотистые товары с достаточной историей -------
     per_sku = df.groupby(SKU).agg(total=(QTY, "sum"), n=(QTY, "size"))
@@ -330,17 +338,61 @@ def autotune_service_factor(
     top = eligible.sort_values("total", ascending=False).head(max_skus).index
     sample = df[df[SKU].isin(top)]
 
-    # --- короткий бэктест по сетке -----------------------------------------
-    results = []
-    for factor in grid:
+    # --- бэктест по сетке ---------------------------------------------------
+    results: list[dict] = []
+    tested: set[float] = set()
+
+    def probe(factor: float) -> dict | None:
+        factor = clamp(factor)
+        if factor in tested:
+            return None
+        tested.add(factor)
         _table, summary = backtest(
             sample, model, econ=econ, test_days=test_days, horizon=30,
             lead_time=lead_time, review_period=review_period,
             service_factor=factor, only_forecastable=True)
-        if summary:
-            results.append((factor, summary["Эффект в месяц, ₽"]))
-            if verbose:
-                print(f"    × {factor:.2f} -> {summary['Эффект в месяц, ₽']:>8} ₽/мес")
+        if not summary:
+            return None
+        row = {
+            "factor": factor,
+            "effect": summary["Эффект в месяц, ₽"],
+            "lost": summary["Упущенная выручка to-be, ₽"],
+            "lost_baseline": summary["Упущенная выручка as-is, ₽"],
+            # полная сводка пригодится вызывающему коду: так не нужно
+            # гонять бэктест ещё раз ради тех же цифр
+            "_summary": summary,
+        }
+        results.append(row)
+        if verbose:
+            print(f"    × {factor:.2f} -> {summary['Эффект в месяц, ₽']:>8} ₽/мес"
+                  f"  (упущено {summary['Упущенная выручка to-be, ₽']:>8} ₽)")
+        return row
+
+    for factor in grid:
+        probe(factor)
+
+    # АДАПТИВНОЕ РАСШИРЕНИЕ ПОИСКА.
+    # Если лучшее значение оказалось на краю сетки, значит настоящий
+    # оптимум за её пределами и останавливаться нельзя — иначе система
+    # молча вернёт границу диапазона и выдаст её за найденный ответ.
+    # Именно так возникает «эффект 16 ₽»: поиск упёрся в потолок.
+    for _ in range(4):
+        if not results:
+            break
+        baseline_lost = results[0]["lost_baseline"]
+        tol = max(baseline_lost * 1.05, 100.0)
+        ok = [r for r in results if r["lost"] <= tol]
+        best_now = (max(ok, key=lambda r: r["effect"]) if ok
+                    else min(results, key=lambda r: r["lost"]))
+        edge = max(r["factor"] for r in results)
+        # расширяем только вверх: край снизу означает, что запас и так
+        # минимален, а дефицит там только растёт
+        if best_now["factor"] < edge - 1e-9 or edge >= MAX_SERVICE_FACTOR:
+            break
+        if verbose:
+            print(f"    оптимум на границе × {edge:.2f} — расширяю поиск")
+        if probe(edge * 1.35) is None:
+            break
 
     if not results:
         return {"service_factor": round(theoretical, 2),
@@ -348,13 +400,38 @@ def autotune_service_factor(
                 "source": "теория (бэктест не дал результата)",
                 "grid": []}
 
-    best_factor, best_effect = max(results, key=lambda r: r[1])
+    # ОГРАНИЧЕНИЕ ПО УРОВНЮ СЕРВИСА.
+    # Чистая максимизация прибыли может выбрать тощий запас: экономия
+    # на хранении перекроет рост упущенных продаж, и формально эффект
+    # будет выше. Но цель системы — снижать дефицит, а не разменивать
+    # его на складские расходы: менеджер, у которого товар стал чаще
+    # заканчиваться, такой «оптимизации» не обрадуется.
+    # Поэтому сначала отбираем варианты, которые не ухудшают дефицит
+    # против текущей практики, и лучший ищем уже среди них.
+    baseline_lost = results[0]["lost_baseline"]
+    tolerance = max(baseline_lost * 1.05, 100.0)
+    safe = [r for r in results if r["lost"] <= tolerance]
+
+    if safe:
+        best = max(safe, key=lambda r: r["effect"])
+        constrained = len(safe) < len(results)
+    else:
+        # ни один вариант не удержал дефицит — берём тот, где он минимален
+        best = min(results, key=lambda r: r["lost"])
+        constrained = True
+
+    best_factor, best_effect = best["factor"], best["effect"]
+    if verbose and constrained:
+        print(f"    (варианты с ростом дефицита отброшены: "
+              f"порог {tolerance:.0f} ₽)")
     return {
         "service_factor": round(best_factor, 2),
         "theoretical": round(theoretical, 2),
         "best_effect_per_month": best_effect,
         "source": "теория + проверка на ваших данных",
-        "grid": [{"factor": f, "effect": e} for f, e in results],
+        "grid": [{k: v for k, v in r.items() if k != "_summary"} for r in results],
+        "best_summary": best.get("_summary"),
+        "service_constrained": constrained,
         "skus_tested": int(len(top)),
         "test_days": test_days,
     }
