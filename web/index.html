@@ -1,0 +1,2147 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title data-i18n="pageTitle">Складские запасы — прогноз и закупки</title>
+<style>
+  :root {
+    --bg: #F3F4F1;
+    --surface: #FFFFFF;
+    --border: #DBDDD5;
+    --border-strong: #B7BBB0;
+    --text-primary: #1E2523;
+    --text-secondary: #5B615C;
+    --text-muted: #8A8F87;
+    --accent: #35566B;
+    --accent-dark: #223B49;
+    --accent-bg: #E9EEF1;
+    --prevyear: #A9BAC4;
+    --alert: #B85A26;
+    --alert-bg: #FBEEE4;
+    --ok: #4C7A5E;
+    --ok-bg: #EAF2EC;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --radius: 6px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: var(--sans);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  *:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .hidden { display: none !important; }
+
+  input[type="checkbox"] { accent-color: var(--accent); }
+
+  .wrap {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 32px 24px 64px;
+  }
+
+  header.top {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 28px;
+  }
+
+  .mark {
+    flex: none;
+    width: 34px;
+    height: 34px;
+  }
+
+  header.top h1 {
+    font-size: 21px;
+    font-weight: 500;
+    margin: 0 0 2px;
+  }
+
+  header.top p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 14px;
+  }
+
+  .lang-switch {
+    margin-left: auto;
+    display: flex;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    overflow: hidden;
+    flex: none;
+  }
+
+  .lang-btn {
+    border: none;
+    border-radius: 0;
+    padding: 7px 12px;
+    font-size: 12.5px;
+    background: var(--surface);
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+
+  .lang-btn:hover { background: var(--bg); }
+
+  .lang-btn.active {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+
+  /* ---------- Upload view ---------- */
+
+  #upload-view { margin-top: 8px; }
+
+  .dropzone {
+    padding: 56px 32px;
+    text-align: center;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--surface);
+    transition: border-color 0.15s, background 0.15s;
+  }
+
+  .dropzone.drag {
+    border-color: var(--accent);
+    background: var(--accent-bg);
+  }
+
+  .dropzone p.lead {
+    font-size: 15px;
+    color: var(--text-primary);
+    margin: 0 0 18px;
+  }
+
+  button {
+    font-family: inherit;
+    font-size: 14px;
+    cursor: pointer;
+    border-radius: var(--radius);
+    padding: 9px 16px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    color: var(--text-primary);
+    transition: background 0.15s, border-color 0.15s;
+  }
+
+  button:hover { background: var(--bg); }
+
+  button:disabled { opacity: 0.35; cursor: default; }
+  button:disabled:hover { background: var(--surface); }
+
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+
+  button.primary:hover { background: var(--accent-dark); }
+
+  button.text {
+    border: none;
+    background: none;
+    color: var(--accent);
+    padding: 6px 4px;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  button.text:hover { background: none; color: var(--accent-dark); }
+
+  .dropzone .secondary-actions {
+    margin-top: 22px;
+    display: flex;
+    justify-content: center;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+
+  .hint {
+    margin-top: 16px;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
+  .error-box {
+    margin-top: 16px;
+    padding: 12px 14px;
+    border-radius: var(--radius);
+    background: var(--alert-bg);
+    color: var(--alert);
+    font-size: 13.5px;
+    display: none;
+  }
+
+  .error-box.show { display: block; }
+
+  /* ---------- App view ---------- */
+
+  #app-view { display: none; }
+
+  .toolbar {
+    display: flex;
+    align-items: flex-end;
+    gap: 22px;
+    flex-wrap: wrap;
+    padding: 16px 18px;
+    margin-bottom: 20px;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .field label {
+    font-size: 12.5px;
+    color: var(--text-secondary);
+  }
+
+  .field select, .field input[type="number"] {
+    font-family: inherit;
+    font-size: 14px;
+    padding: 7px 9px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text-primary);
+    width: 130px;
+  }
+
+  .toolbar .spacer { flex: 1; }
+
+  .stats-row {
+    display: flex;
+    gap: 28px;
+    padding: 0 18px;
+    margin-bottom: 20px;
+  }
+
+  .stat .num {
+    font-family: var(--mono);
+    font-size: 22px;
+    font-weight: 500;
+  }
+
+  .stat .label {
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+  }
+
+  .stat.alert .num { color: var(--alert); }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+
+  .table-scroll {
+    overflow-x: auto;
+    margin-bottom: 22px;
+  }
+
+  thead th {
+    text-align: left;
+    font-weight: 500;
+    color: var(--text-secondary);
+    font-size: 12.5px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  tbody td {
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  tbody tr {
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    transition: background 0.15s;
+  }
+
+  tbody tr:hover { background: var(--bg); }
+  tbody tr.selected { background: var(--accent-bg); }
+  tbody tr.row-alert { border-left-color: var(--alert); }
+  tbody tr.row-ok { border-left-color: var(--ok); }
+
+  td.num, th.num { font-family: var(--mono); }
+
+  .info-dot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    border: 1px solid var(--border-strong);
+    color: var(--text-muted);
+    font-size: 9px;
+    line-height: 1;
+    cursor: help;
+    vertical-align: middle;
+    margin-left: 3px;
+    font-family: var(--sans);
+  }
+
+  .status-tag {
+    font-size: 13px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .status-tag .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex: none;
+  }
+
+  .status-tag.alert { color: var(--alert); }
+  .status-tag.alert .dot { background: var(--alert); }
+  .status-tag.ok { color: var(--ok); }
+  .status-tag.ok .dot { background: var(--ok); }
+  .status-tag.unknown { color: var(--text-muted); }
+  .status-tag.unknown .dot { background: var(--text-muted); }
+
+  .footnote {
+    font-size: 12.5px;
+    color: var(--text-muted);
+    padding: 0 18px 4px;
+  }
+
+  .chart-panel { padding: 18px 20px 20px; }
+
+  .chart-panel .chart-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
+
+  .chart-panel h2 {
+    font-size: 15px;
+    font-weight: 500;
+    margin: 0;
+  }
+
+  .chart-head-right {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+
+  .chart-legend {
+    display: flex;
+    gap: 18px;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+  }
+
+  .chart-legend span.item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .chart-legend .sw {
+    width: 12px;
+    height: 3px;
+    border-radius: 2px;
+    display: inline-block;
+  }
+
+  .chart-legend .sw.bar { background: var(--accent); }
+  .chart-legend .sw.line { background: var(--alert); }
+  .chart-legend .sw.prevyear { background: var(--prevyear); }
+
+  .chart-controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+
+  .chart-controls select {
+    font-family: inherit;
+    font-size: 13.5px;
+    padding: 7px 9px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text-primary);
+    max-width: 220px;
+  }
+
+  .range-nav {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .range-nav input[type="date"] {
+    font-family: inherit;
+    font-size: 13px;
+    padding: 6px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text-primary);
+  }
+
+  .range-nav .sep { color: var(--text-muted); font-size: 13px; }
+
+  .range-nav button {
+    padding: 6px 10px;
+    font-size: 14px;
+    line-height: 1;
+  }
+
+  .inline-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13.5px;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+
+  .prevyear-note {
+    font-size: 12.5px;
+    color: var(--text-muted);
+    margin: 0 0 10px;
+  }
+
+  canvas#chart { display: block; width: 100%; cursor: pointer; }
+
+  .day-detail {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    background: var(--accent-bg);
+    color: var(--text-primary);
+    font-size: 13.5px;
+  }
+
+  .grid-charts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+  }
+
+  .grid-charts .mini {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px 10px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+
+  .grid-charts .mini:hover { border-color: var(--accent); }
+
+  .grid-charts .mini h3 {
+    font-size: 13px;
+    font-weight: 500;
+    margin: 0 0 8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .grid-charts canvas { display: block; width: 100%; }
+
+  .toolbar-reset { font-size: 13.5px; }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 24px 14px 48px; }
+    .toolbar { gap: 14px; }
+    .field select, .field input[type="number"] { width: 100px; }
+  }
+
+  /* === API-INTEGRATION === */
+  .server-status {
+    font-size: 13px; padding: 7px 12px; border-radius: 7px;
+    margin-bottom: 12px; display: inline-block;
+  }
+  .server-status.online { background: #E8F3EC; color: #1F5F3F; }
+  .server-status.offline { background: #FBF0E4; color: #8A5A22; }
+  .server-status.connecting { background: #EDF1F5; color: #44586B; }
+
+  .clean-report { padding: 16px 18px; margin-bottom: 16px; }
+  .clean-head { font-weight: 600; margin-bottom: 12px; color: #2A3B47; }
+  .clean-grid { display: flex; flex-wrap: wrap; gap: 22px; }
+  .clean-item { display: flex; flex-direction: column; }
+  .clean-item .n { font-size: 19px; font-weight: 600; color: #35566B; }
+  .clean-item .l { font-size: 12px; color: #6B7C88; margin-top: 2px; }
+  .clean-warn {
+    margin: 12px 0 0; padding-left: 18px; font-size: 13px;
+    color: #8A5A22; line-height: 1.5;
+  }
+  .clean-log {
+    display: inline-block; margin-top: 12px; font-size: 13px;
+    color: #35566B;
+  }
+
+  .mode-badge {
+    display: inline-block; margin-left: 8px; padding: 2px 7px;
+    border-radius: 4px; font-size: 11px; font-weight: 600;
+    vertical-align: middle; cursor: help;
+  }
+  .badge-ml { background: #E3EDF3; color: #2F5468; }
+  .badge-stats { background: #EDF1F5; color: #5A6B78; }
+  .badge-minmax { background: #F6EBDC; color: #8A5A22; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <svg class="mark" viewBox="0 0 34 34" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="3" y="15" width="8" height="16" rx="1.5" fill="#35566B"/>
+      <rect x="14" y="9" width="8" height="22" rx="1.5" fill="#5B7F92"/>
+      <rect x="25" y="3" width="8" height="28" rx="1.5" fill="#B85A26"/>
+    </svg>
+    <div>
+      <h1 data-i18n="h1">Управление складскими запасами</h1>
+      <p data-i18n="subtitle">Загрузите историю продаж — получите прогноз спроса и рекомендации по закупке.</p>
+    </div>
+    <div class="lang-switch" role="group" aria-label="Language">
+      <button id="lang-ru" type="button" class="lang-btn active">RU</button>
+      <button id="lang-en" type="button" class="lang-btn">EN</button>
+    </div>
+  </header>
+
+  <!-- ===== Upload view ===== -->
+  <section id="upload-view">
+    <div class="dropzone panel" id="dropzone">
+      <p class="lead" data-i18n="dropzoneLead">Перетащите файл CSV или Excel сюда или выберите на компьютере</p>
+      <input type="file" id="file-input" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none">
+      <button class="primary" id="pick-file-btn" data-i18n="pickFileBtn">Выбрать файл</button>
+      <div class="secondary-actions">
+        <button class="text" id="sample-btn" data-i18n="sampleBtn">Скачать пример CSV</button>
+      </div>
+      <p class="hint" data-i18n="hint">Нужны колонки: дата, товар, продано. Остаток на складе — по желанию (заполняется на последней дате). Другие колонки допустимы — они просто не используются.</p>
+    </div>
+    <div class="error-box" id="error-box"></div>
+  </section>
+
+  <!-- ===== App view ===== -->
+  <section id="app-view">
+
+    <div class="toolbar panel">
+      <div class="field">
+        <label for="horizon-select" data-i18n="horizonLabel">Горизонт прогноза</label>
+        <select id="horizon-select">
+          <option value="30" data-i18n="horizon30">30 дней</option>
+          <option value="60" data-i18n="horizon60">60 дней</option>
+          <option value="90" data-i18n="horizon90">90 дней</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="leadtime-input" data-i18n="leadtimeLabel">Срок поставки, дней</label>
+        <input type="number" id="leadtime-input" min="1" max="180" value="14">
+      </div>
+      <div class="field">
+        <label for="demand-window-input" data-i18n="demandWindowLabel">Период расчёта спроса, дней</label>
+        <input type="number" id="demand-window-input" min="1" max="3650" value="30" disabled>
+      </div>
+      <label class="inline-checkbox" id="demand-window-all-label" style="padding-bottom:9px;">
+        <input type="checkbox" id="demand-window-all-checkbox" checked>
+        <span data-i18n="demandWindowAllLabel">За всё время</span>
+      </label>
+      <div class="spacer"></div>
+      <button id="reset-btn" class="toolbar-reset" data-i18n="resetBtn">Загрузить другой файл</button>
+    </div>
+
+    <!-- === API-INTEGRATION === -->
+    <div id="server-status" class="server-status offline"></div>
+    <div id="clean-report" class="panel clean-report" style="display:none"></div>
+
+    <div class="stats-row">
+      <div class="stat">
+        <div class="num" id="stat-total">0</div>
+        <div class="label" data-i18n="statTotalLabel">товаров загружено</div>
+      </div>
+      <div class="stat alert">
+        <div class="num" id="stat-alerts">0</div>
+        <div class="label" data-i18n="statAlertsLabel">требуют пополнения</div>
+      </div>
+    </div>
+
+    <div class="table-scroll panel">
+      <table>
+        <thead>
+          <tr>
+            <th data-i18n="thProduct">Товар</th>
+            <th class="num" data-i18n="thDemand">Спрос/день</th>
+            <th class="num" data-i18n="thStock">Остаток</th>
+            <th class="num" data-i18n="thDays">Хватит дней</th>
+            <th class="num" data-i18n="thForecast">Прогноз на горизонт</th>
+            <th class="num" data-i18n="thOrder">Рекомендуемый заказ</th>
+            <th data-i18n="thStatus">Статус</th>
+          </tr>
+        </thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </div>
+    <p class="footnote" data-i18n="footnote">Прогноз — среднее дневное потребление за загруженный период с поправкой на разброс продаж (точка перезаказа = спрос за срок поставки + страховой запас). Простая статистическая модель, не машинное обучение.</p>
+
+    <div class="chart-panel panel" style="margin-top:20px;">
+      <div class="chart-head">
+        <h2 id="chart-title">Динамика продаж</h2>
+        <div class="chart-head-right">
+          <div class="chart-legend">
+            <span class="item"><span class="sw bar"></span><span data-i18n="legendBars">Продажи по дням</span></span>
+            <span class="item"><span class="sw line"></span><span data-i18n="legendAvg">Средний спрос/день</span></span>
+            <span class="item hidden" id="legend-prevyear"><span class="sw prevyear"></span><span data-i18n="legendPrevYear">Прошлый год</span></span>
+          </div>
+          <button id="view-toggle-btn" data-i18n="viewToggleShowAll">Показать все товары</button>
+        </div>
+      </div>
+
+      <div class="chart-controls">
+        <select id="sku-select" aria-label="Select product"></select>
+        <div class="range-nav">
+          <button id="range-prev" aria-label="Previous period">←</button>
+          <input type="date" id="range-from" aria-label="From date">
+          <span class="sep">—</span>
+          <input type="date" id="range-to" aria-label="To date">
+          <button id="range-next" aria-label="Next period">→</button>
+        </div>
+        <label class="inline-checkbox" id="prevyear-toggle-label">
+          <input type="checkbox" id="prevyear-checkbox">
+          <span data-i18n="prevYearToggleLabel">Показать прошлый год</span>
+        </label>
+      </div>
+      <p class="prevyear-note hidden" id="prevyear-note" data-i18n="noPrevYearDataNote">Нет данных за прошлый год для этого товара.</p>
+
+      <div id="chart-single">
+        <canvas id="chart" height="280"></canvas>
+        <div id="day-detail" class="day-detail hidden"></div>
+      </div>
+      <div id="chart-grid" class="grid-charts hidden"></div>
+    </div>
+
+  </section>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------- i18n ----------------
+
+  var I18N = {
+    ru: {
+      pageTitle: "Складские запасы — прогноз и закупки",
+      h1: "Управление складскими запасами",
+      subtitle: "Загрузите историю продаж — получите прогноз спроса и рекомендации по закупке.",
+      dropzoneLead: "Перетащите файл CSV или Excel сюда или выберите на компьютере",
+      pickFileBtn: "Выбрать файл",
+      sampleBtn: "Скачать пример CSV",
+      hint: "Нужны колонки: дата, товар, продано. Остаток на складе — по желанию (заполняется на последней дате). Поддерживаются .csv и .xlsx (если листов несколько — берётся первый). Другие колонки допустимы — они просто не используются.",
+      horizonLabel: "Горизонт прогноза",
+      horizon30: "30 дней",
+      horizon60: "60 дней",
+      horizon90: "90 дней",
+      leadtimeLabel: "Срок поставки, дней",
+      demandWindowLabel: "Период расчёта спроса, дней",
+      demandWindowAllLabel: "За всё время",
+      resetBtn: "Загрузить другой файл",
+      statTotalLabel: "товаров загружено",
+      statAlertsLabel: "требуют пополнения",
+      thProduct: "Товар",
+      thDemand: "Спрос/день",
+      thStock: "Остаток",
+      thDays: "Хватит дней",
+      thForecast: "Прогноз на горизонт",
+      thOrder: "Рекомендуемый заказ",
+      thStatus: "Статус",
+      statusAlert: "Пополнить",
+      statusOk: "Норма",
+      statusUnknown: "Нет данных об остатке",
+      footnote: "Прогноз — среднее дневное потребление за загруженный период с поправкой на разброс продаж (точка перезаказа = спрос за срок поставки + страховой запас). Простая статистическая модель, не машинное обучение.",
+      chartTitleSingle: "Динамика продаж",
+      chartTitleAll: "Динамика продаж — все товары",
+      legendBars: "Продажи по дням",
+      legendAvg: "Средний спрос/день",
+      legendPrevYear: "Прошлый год",
+      viewToggleShowAll: "Показать все товары",
+      viewToggleShowOne: "Показать один товар",
+      prevYearToggleLabel: "Показать прошлый год",
+      noPrevYearDataNote: "Нет данных за прошлый год для этого товара.",
+      noDataForPeriod: "Нет данных за этот период",
+      skippedRowsMsg: "{n} строк пропущено из-за некорректного формата даты или количества.",
+      errEmptyFile: "Файл пуст или содержит только заголовок.",
+      errNoColumns: "Не удалось найти нужные колонки. Ожидаются: дата, товар, продано.",
+      errNoRows: "Не найдено ни одной корректной строки с данными.",
+      errXlsxParse: "Не удалось прочитать xlsx-файл. Убедитесь, что это современный формат Excel (.xlsx, не старый .xls), и попробуйте пересохранить файл.",
+      avgTooltip: "За последние {days} дней товар покупали в среднем {avg} раз(а) в день.",
+      daySold: "{date} — продано {qty} шт.",
+      dayNoData: "Данных за {date} нет.",
+      dayUp: "Рост к прошлому году: +{pct}%",
+      dayDown: "Снижение к прошлому году: {pct}%"
+    },
+    en: {
+      pageTitle: "Warehouse inventory — forecast & ordering",
+      h1: "Warehouse inventory management",
+      subtitle: "Upload your sales history — get a demand forecast and reorder recommendations.",
+      dropzoneLead: "Drag a CSV or Excel file here or choose one from your computer",
+      pickFileBtn: "Choose file",
+      sampleBtn: "Download sample CSV",
+      hint: "Required columns: date, product, quantity sold. Current stock is optional (fill it in on the latest date). Both .csv and .xlsx are supported (if there are several sheets, the first one is used). Extra columns are fine — they're simply ignored.",
+      horizonLabel: "Forecast horizon",
+      horizon30: "30 days",
+      horizon60: "60 days",
+      horizon90: "90 days",
+      leadtimeLabel: "Lead time, days",
+      demandWindowLabel: "Demand calculation period, days",
+      demandWindowAllLabel: "All time",
+      resetBtn: "Load another file",
+      statTotalLabel: "products loaded",
+      statAlertsLabel: "need reordering",
+      thProduct: "Product",
+      thDemand: "Demand/day",
+      thStock: "Stock",
+      thDays: "Days left",
+      thForecast: "Forecast for horizon",
+      thOrder: "Recommended order",
+      thStatus: "Status",
+      statusAlert: "Reorder",
+      statusOk: "OK",
+      statusUnknown: "No stock data",
+      footnote: "The forecast is average daily demand over the loaded period, adjusted for sales variability (reorder point = demand over lead time + safety stock). A simple statistical model, not machine learning.",
+      chartTitleSingle: "Sales trend",
+      chartTitleAll: "Sales trend — all products",
+      legendBars: "Daily sales",
+      legendAvg: "Average demand/day",
+      legendPrevYear: "Last year",
+      viewToggleShowAll: "Show all products",
+      viewToggleShowOne: "Show one product",
+      prevYearToggleLabel: "Show last year",
+      noPrevYearDataNote: "No data from last year for this product.",
+      noDataForPeriod: "No data for this period",
+      skippedRowsMsg: "{n} rows were skipped due to an invalid date or quantity format.",
+      errEmptyFile: "The file is empty or contains only a header row.",
+      errNoColumns: "Couldn't find the required columns. Expected: date, product, quantity sold.",
+      errNoRows: "No valid data rows were found.",
+      errXlsxParse: "Couldn't read the xlsx file. Make sure it's a modern Excel format (.xlsx, not the older .xls), and try re-saving the file.",
+      avgTooltip: "Over the last {days} days, this product sold an average of {avg} units per day.",
+      daySold: "{date} — sold {qty} units.",
+      dayNoData: "No data for {date}.",
+      dayUp: "Up {pct}% year over year",
+      dayDown: "Down {pct}% year over year"
+    }
+  };
+
+  var currentLang = "ru";
+
+  function t(key) {
+    return (I18N[currentLang] && I18N[currentLang][key]) || I18N.ru[key] || key;
+  }
+
+  function tf(key, params) {
+    var s = t(key);
+    for (var k in params) {
+      s = s.replace("{" + k + "}", params[k]);
+    }
+    return s;
+  }
+
+  function applyStaticText() {
+    document.querySelectorAll("[data-i18n]").forEach(function (el) {
+      el.textContent = t(el.getAttribute("data-i18n"));
+    });
+  }
+
+  // ---------------- State ----------------
+  var data = {};          // sku -> { history: [{date, qty}], currentStock: number|null }
+  var skuOrder = [];
+  var selectedSku = null;
+  var horizonDays = 30;
+  var leadTimeDays = 14;
+  var demandWindowDays = 30;
+  var demandWindowAll = true;
+  var viewMode = "single"; // "single" | "all"
+
+  /* === API-INTEGRATION === */
+  // Адрес сервера с моделью. Порядок поиска:
+  //   1) ?api=http://... в адресной строке (удобно для демонстрации)
+  //   2) тот же хост, откуда открыта страница (когда всё на одном сервере)
+  //   3) localhost:8000 — обычный локальный запуск
+  var API_BASE = (function () {
+    try {
+      var p = new URLSearchParams(location.search).get("api");
+      if (p) return p.replace(/\/$/, "");
+      if (location.protocol === "http:" || location.protocol === "https:") {
+        return location.origin;
+      }
+    } catch (e) { /* открыт как file:// — идём дальше */ }
+    return "http://localhost:8000";
+  })();
+
+  var sessionId = null;        // выдаётся сервером после загрузки файла
+  var serverStats = {};        // sku -> строка плана закупки с сервера
+  var serverMeta = {};         // sku -> режим прогноза и класс спроса
+  var cleaningReport = null;   // отчёт об очистке данных
+  var usingServer = false;     // работаем от модели или считаем локально
+
+  var globalMinDate = null;
+  var globalMaxDate = null;
+  var rangeStart = null;
+  var rangeEnd = null;
+
+  // ---------------- DOM refs ----------------
+  var uploadView = document.getElementById("upload-view");
+  var appView = document.getElementById("app-view");
+  var dropzone = document.getElementById("dropzone");
+  var fileInput = document.getElementById("file-input");
+  var pickFileBtn = document.getElementById("pick-file-btn");
+  var sampleBtn = document.getElementById("sample-btn");
+  var errorBox = document.getElementById("error-box");
+  var horizonSelect = document.getElementById("horizon-select");
+  var leadtimeInput = document.getElementById("leadtime-input");
+  var demandWindowInput = document.getElementById("demand-window-input");
+  var demandWindowAllCheckbox = document.getElementById("demand-window-all-checkbox");
+  var resetBtn = document.getElementById("reset-btn");
+  var tableBody = document.getElementById("table-body");
+  var statTotal = document.getElementById("stat-total");
+  var statAlerts = document.getElementById("stat-alerts");
+  var chartTitle = document.getElementById("chart-title");
+  var chartCanvas = document.getElementById("chart");
+  var viewToggleBtn = document.getElementById("view-toggle-btn");
+  var skuSelect = document.getElementById("sku-select");
+  var rangeFrom = document.getElementById("range-from");
+  var rangeTo = document.getElementById("range-to");
+  var rangePrev = document.getElementById("range-prev");
+  var rangeNext = document.getElementById("range-next");
+  var chartSingle = document.getElementById("chart-single");
+  var chartGrid = document.getElementById("chart-grid");
+  var prevYearCheckbox = document.getElementById("prevyear-checkbox");
+  var prevYearToggleLabel = document.getElementById("prevyear-toggle-label");
+  var prevYearNote = document.getElementById("prevyear-note");
+  var legendPrevYearEl = document.getElementById("legend-prevyear");
+  var dayDetailPanel = document.getElementById("day-detail");
+  var langRuBtn = document.getElementById("lang-ru");
+  var langEnBtn = document.getElementById("lang-en");
+
+  // ---------------- Date helpers ----------------
+
+  // Always format/parse dates from local calendar components, never via
+  // toISOString(), which converts to UTC and can shift the date by a day.
+  function isoDate(d) {
+    var y = d.getFullYear();
+    var m = ("0" + (d.getMonth() + 1)).slice(-2);
+    var day = ("0" + d.getDate()).slice(-2);
+    return y + "-" + m + "-" + day;
+  }
+
+  function parseISODateInput(str) {
+    var parts = str.split("-");
+    return new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+  }
+
+  // Zero-padded day.month, e.g. "06.08" — never a bare "6.8" that reads
+  // like a decimal number.
+  function formatShortDate(d) {
+    var day = ("0" + d.getDate()).slice(-2);
+    var month = ("0" + (d.getMonth() + 1)).slice(-2);
+    return day + "." + month;
+  }
+
+  function formatFullDate(d) {
+    var day = ("0" + d.getDate()).slice(-2);
+    var month = ("0" + (d.getMonth() + 1)).slice(-2);
+    return day + "." + month + "." + d.getFullYear();
+  }
+
+  function addDays(d, n) {
+    return new Date(d.getTime() + n * 86400000);
+  }
+
+  // ---------------- CSV parsing ----------------
+
+  function parseCSVLine(line) {
+    var result = [];
+    var cur = "";
+    var inQuotes = false;
+    for (var i = 0; i < line.length; i++) {
+      var ch = line[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (line[i + 1] === '"') { cur += '"'; i++; }
+          else { inQuotes = false; }
+        } else { cur += ch; }
+      } else {
+        if (ch === '"') { inQuotes = true; }
+        else if (ch === ",") { result.push(cur); cur = ""; }
+        else { cur += ch; }
+      }
+    }
+    result.push(cur);
+    return result.map(function (s) { return s.trim(); });
+  }
+
+  function csvEscape(field) {
+    var s = String(field);
+    if (/[",\n]/.test(s)) {
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+  }
+
+  function findColumnIndex(headers, candidates) {
+    var norm = headers.map(function (h) { return h.toLowerCase().trim(); });
+    for (var i = 0; i < norm.length; i++) {
+      for (var j = 0; j < candidates.length; j++) {
+        if (norm[i] === candidates[j] || norm[i].indexOf(candidates[j]) !== -1) return i;
+      }
+    }
+    return -1;
+  }
+
+  function parseDate(str) {
+    if (!str) return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return parseISODateInput(str);
+    var d = new Date(str);
+    if (isNaN(d.getTime())) return null;
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+
+  // Converts an Excel date serial number (days since 1899-12-30, per the
+  // spreadsheet epoch) into a local-midnight Date, the same convention
+  // used everywhere else in this file.
+  function excelSerialToDate(serial) {
+    var utcDays = Math.floor(serial - 25569);
+    var utcMs = utcDays * 86400 * 1000;
+    var d = new Date(utcMs);
+    return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  }
+
+  // Shared by the CSV and the xlsx path. Cells are {text, isString}
+  // objects — CSV values are always isString:true; xlsx numeric cells
+  // (including Excel's numeric date serials) come through isString:false
+  // so the date column can be converted correctly either way.
+  function processTable(headerCells, dataRowsCells) {
+    var headers = headerCells.map(function (c) { return c.text; });
+    var dateIdx = findColumnIndex(headers, ["дата", "date"]);
+    var skuIdx = findColumnIndex(headers, ["товар", "артикул", "sku", "product", "номенклатура"]);
+    var qtyIdx = findColumnIndex(headers, ["продано", "quantity_sold", "количество", "qty", "sales", "кол-во"]);
+    var stockIdx = findColumnIndex(headers, ["остаток", "current_stock", "запас", "stock"]);
+
+    if (dateIdx === -1 || skuIdx === -1 || qtyIdx === -1) {
+      return { ok: false, message: t("errNoColumns") };
+    }
+
+    var newData = {};
+    var skippedRows = 0;
+
+    for (var i = 0; i < dataRowsCells.length; i++) {
+      var cells = dataRowsCells[i];
+      var dateCell = cells[dateIdx];
+      var skuCell = cells[skuIdx];
+      var qtyCell = cells[qtyIdx];
+      var stockCell = stockIdx !== -1 ? cells[stockIdx] : null;
+
+      var date = null;
+      if (dateCell) {
+        date = dateCell.isString ? parseDate(dateCell.text) : excelSerialToDate(parseFloat(dateCell.text));
+      }
+      var sku = skuCell ? skuCell.text.trim() : "";
+      var qty = qtyCell ? parseFloat(qtyCell.text) : NaN;
+
+      if (!date || !sku || isNaN(qty)) { skippedRows++; continue; }
+
+      if (!newData[sku]) newData[sku] = { history: [], stockEntries: [] };
+      newData[sku].history.push({ date: date, qty: qty });
+
+      if (stockCell && stockCell.text !== "" && !isNaN(parseFloat(stockCell.text))) {
+        newData[sku].stockEntries.push({ date: date, val: parseFloat(stockCell.text) });
+      }
+    }
+
+    var skus = Object.keys(newData);
+    if (skus.length === 0) {
+      return { ok: false, message: t("errNoRows") };
+    }
+
+    var globalMin = null, globalMax = null;
+    skus.forEach(function (sku) {
+      newData[sku].history.sort(function (a, b) { return a.date - b.date; });
+      newData[sku].stockEntries.sort(function (a, b) { return a.date - b.date; });
+      var entries = newData[sku].stockEntries;
+      newData[sku].currentStock = entries.length ? entries[entries.length - 1].val : null;
+      delete newData[sku].stockEntries;
+
+      var h = newData[sku].history;
+      if (h.length) {
+        if (!globalMin || h[0].date < globalMin) globalMin = h[0].date;
+        var last = h[h.length - 1].date;
+        if (!globalMax || last > globalMax) globalMax = last;
+      }
+    });
+
+    data = newData;
+    skuOrder = skus;
+    selectedSku = skus[0];
+
+    return { ok: true, skippedRows: skippedRows, minDate: globalMin, maxDate: globalMax };
+  }
+
+  function processCSVText(text) {
+    var lines = text.split(/\r?\n/).filter(function (l) { return l.trim().length > 0; });
+    if (lines.length < 2) {
+      return { ok: false, message: t("errEmptyFile") };
+    }
+    var wrap = function (s) { return { text: s, isString: true }; };
+    var headerCells = parseCSVLine(lines[0]).map(wrap);
+    var dataRowsCells = [];
+    for (var i = 1; i < lines.length; i++) {
+      dataRowsCells.push(parseCSVLine(lines[i]).map(wrap));
+    }
+    return processTable(headerCells, dataRowsCells);
+  }
+
+  function processSheetRows(rows) {
+    if (rows.length < 2) {
+      return { ok: false, message: t("errEmptyFile") };
+    }
+    return processTable(rows[0], rows.slice(1));
+  }
+
+  // ---------------- xlsx parsing (no external library) ----------------
+  //
+  // A .xlsx file is a zip archive of XML parts. Modern browsers can
+  // inflate zip's DEFLATE entries natively via DecompressionStream, and
+  // parse the resulting XML natively via DOMParser — so the only code
+  // actually needed here is a small hand-rolled zip *directory* reader
+  // (find each named entry's offset and compressed size) plus the
+  // spreadsheet-specific XML shapes (shared strings, sheet cells).
+
+  function readUint16LE(view, off) { return view.getUint16(off, true); }
+  function readUint32LE(view, off) { return view.getUint32(off, true); }
+
+  async function inflateRaw(bytes) {
+    var stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    var buf = await new Response(stream).arrayBuffer();
+    return new Uint8Array(buf);
+  }
+
+  async function unzip(arrayBuffer) {
+    var view = new DataView(arrayBuffer);
+    var bytes = new Uint8Array(arrayBuffer);
+    var len = bytes.length;
+
+    var eocdOffset = -1;
+    for (var i = len - 22; i >= Math.max(0, len - 22 - 65536); i--) {
+      if (readUint32LE(view, i) === 0x06054b50) { eocdOffset = i; break; }
+    }
+    if (eocdOffset === -1) throw new Error("not a zip file");
+
+    var cdEntries = readUint16LE(view, eocdOffset + 10);
+    var cdOffset = readUint32LE(view, eocdOffset + 16);
+
+    var entries = {};
+    var ptr = cdOffset;
+    for (var e = 0; e < cdEntries; e++) {
+      if (readUint32LE(view, ptr) !== 0x02014b50) break;
+      var compMethod = readUint16LE(view, ptr + 10);
+      var compSize = readUint32LE(view, ptr + 20);
+      var nameLen = readUint16LE(view, ptr + 28);
+      var extraLen = readUint16LE(view, ptr + 30);
+      var commentLen = readUint16LE(view, ptr + 32);
+      var localHeaderOffset = readUint32LE(view, ptr + 42);
+      var name = new TextDecoder("utf-8").decode(bytes.subarray(ptr + 46, ptr + 46 + nameLen));
+      entries[name] = { compMethod: compMethod, compSize: compSize, localHeaderOffset: localHeaderOffset };
+      ptr += 46 + nameLen + extraLen + commentLen;
+    }
+
+    var result = {};
+    for (var name in entries) {
+      var f = entries[name];
+      var lhNameLen = readUint16LE(view, f.localHeaderOffset + 26);
+      var lhExtraLen = readUint16LE(view, f.localHeaderOffset + 28);
+      var dataStart = f.localHeaderOffset + 30 + lhNameLen + lhExtraLen;
+      var compData = bytes.subarray(dataStart, dataStart + f.compSize);
+      if (f.compMethod === 0) result[name] = compData;
+      else if (f.compMethod === 8) result[name] = await inflateRaw(compData);
+      else throw new Error("unsupported compression method " + f.compMethod);
+    }
+    return result;
+  }
+
+  function colLetterToIndex(ref) {
+    var letters = ref.match(/[A-Za-z]+/)[0];
+    var idx = 0;
+    for (var i = 0; i < letters.length; i++) idx = idx * 26 + (letters.charCodeAt(i) - 64);
+    return idx - 1;
+  }
+
+  function parseSharedStrings(xmlText) {
+    var doc = new DOMParser().parseFromString(xmlText, "application/xml");
+    var siNodes = doc.getElementsByTagName("si");
+    var out = [];
+    for (var i = 0; i < siNodes.length; i++) {
+      var tNodes = siNodes[i].getElementsByTagName("t");
+      var s = "";
+      for (var j = 0; j < tNodes.length; j++) s += tNodes[j].textContent;
+      out.push(s);
+    }
+    return out;
+  }
+
+  function parseSheetToRows(xmlText, sharedStrings) {
+    var doc = new DOMParser().parseFromString(xmlText, "application/xml");
+    var rowNodes = doc.getElementsByTagName("row");
+    var rows = [];
+    for (var r = 0; r < rowNodes.length; r++) {
+      var cellNodes = rowNodes[r].getElementsByTagName("c");
+      var rowData = [];
+      var maxCol = -1;
+      for (var c = 0; c < cellNodes.length; c++) {
+        var cell = cellNodes[c];
+        var ref = cell.getAttribute("r");
+        if (!ref) continue;
+        var colIdx = colLetterToIndex(ref);
+        var type = cell.getAttribute("t");
+        var value;
+        if (type === "inlineStr") {
+          var isNode = cell.getElementsByTagName("is")[0];
+          var tNode = isNode ? isNode.getElementsByTagName("t")[0] : null;
+          value = { text: tNode ? tNode.textContent : "", isString: true };
+        } else {
+          var vNode = cell.getElementsByTagName("v")[0];
+          var raw = vNode ? vNode.textContent : "";
+          if (type === "s") value = { text: sharedStrings[parseInt(raw, 10)] || "", isString: true };
+          else if (type === "str" || type === "b") value = { text: raw, isString: true };
+          else value = { text: raw, isString: false };
+        }
+        rowData[colIdx] = value;
+        if (colIdx > maxCol) maxCol = colIdx;
+      }
+      var normalized = [];
+      for (var col = 0; col <= maxCol; col++) normalized.push(rowData[col] || { text: "", isString: true });
+      rows.push(normalized);
+    }
+    return rows;
+  }
+
+  async function parseXLSXToRows(arrayBuffer) {
+    var files = await unzip(arrayBuffer);
+    var sheetName = files["xl/worksheets/sheet1.xml"] ? "xl/worksheets/sheet1.xml" : null;
+    if (!sheetName) {
+      var candidates = Object.keys(files).filter(function (n) { return /^xl\/worksheets\/sheet\d+\.xml$/.test(n); });
+      candidates.sort(function (a, b) {
+        var na = parseInt(a.match(/(\d+)/)[1], 10), nb = parseInt(b.match(/(\d+)/)[1], 10);
+        return na - nb;
+      });
+      sheetName = candidates[0];
+    }
+    if (!sheetName) throw new Error("no worksheet found");
+
+    var sharedStrings = files["xl/sharedStrings.xml"]
+      ? parseSharedStrings(new TextDecoder("utf-8").decode(files["xl/sharedStrings.xml"]))
+      : [];
+    var sheetXml = new TextDecoder("utf-8").decode(files[sheetName]);
+    return parseSheetToRows(sheetXml, sharedStrings);
+  }
+
+  // ---------------- Sample data ----------------
+
+  function generateSampleCSV() {
+    var products = [
+      { name: "Кофе в зёрнах, 1 кг", base: 8, trend: 0.03, stock: 40 },
+      { name: "Бумажные полотенца, уп. 6 шт", base: 5, trend: 0, stock: 300 },
+      { name: "Стиральный порошок, 3 кг", base: 3, trend: -0.01, stock: 20 },
+      { name: "Минеральная вода, 1.5 л", base: 15, trend: 0.01, stock: 900 },
+      { name: "Шампунь, 400 мл", base: 4, trend: 0, stock: 55 }
+    ];
+    // Generate a bit over a year so the "compare to last year" feature
+    // has real matching dates to show in the demo.
+    var days = 400;
+    var today = new Date();
+    today.setHours(0, 0, 0, 0);
+    var rows = ["date,sku,quantity_sold,current_stock"];
+
+    products.forEach(function (p) {
+      for (var i = days - 1; i >= 0; i--) {
+        var d = addDays(today, -i);
+        var dow = d.getDay();
+        var weekendMult = (dow === 0 || dow === 6) ? 1.35 : 1.0;
+        var trendMult = 1 + p.trend * (days - i) / 30;
+        var noise = 0.7 + Math.random() * 0.6;
+        var qty = Math.max(0, Math.round(p.base * weekendMult * trendMult * noise));
+        var stockCell = (i === 0) ? p.stock : "";
+        rows.push([csvEscape(isoDate(d)), csvEscape(p.name), csvEscape(qty), csvEscape(stockCell)].join(","));
+      }
+    });
+
+    return rows.join("\n");
+  }
+
+  // ---------------- Stats ----------------
+
+  /* === API-INTEGRATION === */
+
+  function apiUrl(path, params) {
+    var u = API_BASE + path;
+    var qs = Object.keys(params || {})
+      .filter(function (k) { return params[k] !== null && params[k] !== undefined; })
+      .map(function (k) { return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]); })
+      .join("&");
+    return qs ? u + "?" + qs : u;
+  }
+
+  // Загружает файл на сервер. Возвращает true, если модель приняла файл.
+  async function uploadToServer(file) {
+    var fd = new FormData();
+    fd.append("file", file);
+    var res = await fetch(API_BASE + "/upload", { method: "POST", body: fd });
+    if (!res.ok) {
+      var detail = "";
+      try { detail = (await res.json()).detail || ""; } catch (e) { /* пусто */ }
+      throw new Error(detail || ("Сервер вернул " + res.status));
+    }
+    var out = await res.json();
+    sessionId = out.session_id;
+    cleaningReport = out.report;
+    return true;
+  }
+
+  // Забирает с сервера всё, что нужно интерфейсу: очищенную историю,
+  // план закупки и классы спроса.
+  async function loadFromServer() {
+    var histRes = await fetch(apiUrl("/history", { session_id: sessionId }));
+    if (!histRes.ok) throw new Error("Не удалось получить историю продаж");
+    var hist = (await histRes.json()).rows || [];
+
+    data = {};
+    skuOrder = [];
+    hist.forEach(function (row) {
+      var sku = row.sku;
+      if (!data[sku]) {
+        data[sku] = { history: [], stockEntries: [], currentStock: null };
+        skuOrder.push(sku);
+      }
+      var d = parseISODateInput(row.date);
+      if (!d) return;
+      data[sku].history.push({ date: d, qty: Number(row.qty) || 0 });
+      if (row.stock !== null && row.stock !== undefined) {
+        data[sku].stockEntries.push({ date: d, stock: Number(row.stock) });
+        data[sku].currentStock = Number(row.stock);
+      }
+    });
+
+    var planRes = await fetch(apiUrl("/order-plan", {
+      session_id: sessionId,
+      horizon: horizonDays,
+      lead_time_days: leadTimeDays
+    }));
+    if (!planRes.ok) throw new Error("Не удалось получить план закупки");
+    var plan = (await planRes.json()).items || [];
+
+    serverStats = {};
+    plan.forEach(function (p) {
+      var hasStock = p.stock !== null && p.stock !== undefined && !isNaN(p.stock);
+      var daily = p.forecast_horizon_q50 / Math.max(horizonDays, 1);
+      serverStats[p.sku] = {
+        avgDaily: daily,
+        spanDays: null,
+        forecastHorizon: p.forecast_horizon_q50,
+        forecastHigh: p.forecast_horizon_q90,
+        safetyStock: p.safety_stock,
+        reorderPoint: p.reorder_point,
+        stock: hasStock ? p.stock : null,
+        hasStock: hasStock,
+        daysUntilStockout: p.days_of_supply >= 0 ? p.days_of_supply : null,
+        recommendedOrder: p.recommended_order,
+        // статусы сервера богаче, чем у локального расчёта: сводим их
+        // к трём, которые умеет рисовать таблица
+        status: (p.status === "critical" || p.status === "alert") ? "alert"
+              : (p.status === "excess" || p.status === "ok") ? "ok" : "unknown",
+        serverStatus: p.status,
+        statusLabel: p.status_label,
+        mode: p.mode,
+        note: p.note
+      };
+    });
+
+    // классы спроса — не критично, если не ответит
+    serverMeta = {};
+    try {
+      var clsRes = await fetch(apiUrl("/demand-classes", { session_id: sessionId }));
+      if (clsRes.ok) {
+        ((await clsRes.json()).items || []).forEach(function (c) {
+          serverMeta[c.sku] = c;
+        });
+      }
+    } catch (e) { /* работаем без классов */ }
+
+    skuOrder.forEach(function (sku) {
+      data[sku].history.sort(function (a, b) { return a.date - b.date; });
+    });
+    usingServer = true;
+  }
+
+  // Пересчёт при смене горизонта или срока поставки: на сервере это
+  // другая модель, а не пересчёт той же формулы, поэтому перезапрашиваем.
+  async function refreshFromServer() {
+    if (!usingServer || !sessionId) return false;
+    try {
+      await loadFromServer();
+      renderAll();
+      renderServerPanel();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function computeStats(sku) {
+    /* === API-INTEGRATION === */
+    // Если сервер посчитал — берём его результат: там настоящая модель,
+    // обученная на исторических данных, а не среднее по окну.
+    if (usingServer && serverStats[sku]) return serverStats[sku];
+
+    var rec = data[sku];
+    var hist = rec.history;
+    if (!hist || hist.length === 0) return null;
+
+    var minDate = hist[0].date;
+    var maxDate = hist[hist.length - 1].date;
+    var fullSpanDays = Math.max(1, Math.round((maxDate - minDate) / 86400000) + 1);
+
+    // The demand window controls how much recent history feeds the
+    // average — "all time" uses everything, otherwise only the last N
+    // days up to this product's own latest date (capped at what's
+    // actually available, so asking for more days than exist just falls
+    // back to the full span instead of skewing the average).
+    var spanDays, windowHist;
+    if (demandWindowAll) {
+      spanDays = fullSpanDays;
+      windowHist = hist;
+    } else {
+      spanDays = Math.min(demandWindowDays, fullSpanDays);
+      var windowStart = addDays(maxDate, -(spanDays - 1));
+      windowHist = hist.filter(function (h) { return h.date >= windowStart; });
+    }
+
+    var totalQty = windowHist.reduce(function (s, h) { return s + h.qty; }, 0);
+    var avgDaily = totalQty / spanDays;
+
+    var meanObserved = windowHist.length ? totalQty / windowHist.length : 0;
+    var variance = windowHist.length > 1
+      ? windowHist.reduce(function (s, h) { return s + Math.pow(h.qty - meanObserved, 2); }, 0) / (windowHist.length - 1)
+      : 0;
+    var std = Math.sqrt(variance);
+
+    var forecastHorizon = avgDaily * horizonDays;
+    var safetyStock = 1.65 * std * Math.sqrt(leadTimeDays);
+    var reorderPoint = avgDaily * leadTimeDays + safetyStock;
+
+    var stock = rec.currentStock;
+    var hasStock = stock !== null && stock !== undefined;
+
+    var daysUntilStockout = (hasStock && avgDaily > 0) ? stock / avgDaily : null;
+    var recommendedOrder = Math.ceil(forecastHorizon + safetyStock - (hasStock ? stock : 0));
+    if (recommendedOrder < 0) recommendedOrder = 0;
+
+    var status;
+    if (!hasStock) status = "unknown";
+    else if (stock <= reorderPoint) status = "alert";
+    else status = "ok";
+
+    return {
+      avgDaily: avgDaily, spanDays: spanDays, forecastHorizon: forecastHorizon, safetyStock: safetyStock,
+      reorderPoint: reorderPoint, stock: stock, hasStock: hasStock,
+      daysUntilStockout: daysUntilStockout, recommendedOrder: recommendedOrder, status: status
+    };
+  }
+
+  // Builds one entry per calendar day in [start, end], filling zero for
+  // days with no recorded sales, so bars are evenly spaced and the date
+  // axis underneath is accurate regardless of gaps in the source data.
+  function buildDaySeries(sku, start, end) {
+    var rec = data[sku];
+    var map = {};
+    rec.history.forEach(function (h) {
+      var key = isoDate(h.date);
+      map[key] = (map[key] || 0) + h.qty;
+    });
+    var series = [];
+    var cur = new Date(start);
+    while (cur <= end) {
+      var key = isoDate(cur);
+      series.push({ date: new Date(cur), qty: map[key] || 0 });
+      cur = addDays(cur, 1);
+    }
+    return series;
+  }
+
+  // Same idea, but each entry looks up the same calendar day exactly one
+  // year earlier (calendar-based, so leap years are handled correctly).
+  function buildPrevYearSeries(sku, start, end) {
+    var rec = data[sku];
+    var map = {};
+    rec.history.forEach(function (h) {
+      var key = isoDate(h.date);
+      map[key] = (map[key] || 0) + h.qty;
+    });
+    var series = [];
+    var cur = new Date(start);
+    while (cur <= end) {
+      var prevDate = new Date(cur.getFullYear() - 1, cur.getMonth(), cur.getDate());
+      var key = isoDate(prevDate);
+      series.push({ prevDate: prevDate, qty: map[key] || 0, hasData: map.hasOwnProperty(key) });
+      cur = addDays(cur, 1);
+    }
+    return series;
+  }
+
+  // ---------------- Table rendering ----------------
+
+  function fmt(n, decimals) {
+    if (n === null || n === undefined || !isFinite(n)) return "—";
+    var locale = currentLang === "en" ? "en-US" : "ru-RU";
+    return n.toLocaleString(locale, { minimumFractionDigits: decimals || 0, maximumFractionDigits: decimals || 0 });
+  }
+
+  function escapeHtml(s) {
+    var d = document.createElement("div");
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function renderTable() {
+    var rows = skuOrder.map(function (sku) {
+      return { sku: sku, stats: computeStats(sku) };
+    });
+
+    rows.sort(function (a, b) {
+      var rank = { alert: 0, unknown: 1, ok: 2 };
+      if (rank[a.stats.status] !== rank[b.stats.status]) return rank[a.stats.status] - rank[b.stats.status];
+      var da = a.stats.daysUntilStockout === null ? Infinity : a.stats.daysUntilStockout;
+      var db = b.stats.daysUntilStockout === null ? Infinity : b.stats.daysUntilStockout;
+      return da - db;
+    });
+
+    var alertCount = rows.filter(function (r) { return r.stats.status === "alert"; }).length;
+    statTotal.textContent = rows.length;
+    statAlerts.textContent = alertCount;
+
+    tableBody.innerHTML = "";
+    rows.forEach(function (r) {
+      var tr = document.createElement("tr");
+      tr.className = (r.stats.status === "alert" ? "row-alert" : r.stats.status === "ok" ? "row-ok" : "") +
+                      (r.sku === selectedSku ? " selected" : "");
+
+      var statusLabel = r.stats.status === "alert" ? t("statusAlert") : r.stats.status === "ok" ? t("statusOk") : t("statusUnknown");
+      var statusClass = r.stats.status;
+      var avgTooltip = tf("avgTooltip", { days: r.stats.spanDays, avg: fmt(r.stats.avgDaily, 1) });
+
+      tr.innerHTML =
+        "<td>" + escapeHtml(r.sku) + modeBadge(r.sku) + "</td>" +
+        "<td class=\"num\">~" + fmt(Math.round(r.stats.avgDaily), 0) +
+          "<span class=\"info-dot\" title=\"" + escapeHtml(avgTooltip) + "\">?</span></td>" +
+        "<td class=\"num\">" + (r.stats.hasStock ? fmt(r.stats.stock, 0) : "—") + "</td>" +
+        "<td class=\"num\">" + (r.stats.daysUntilStockout === null ? "—" : fmt(r.stats.daysUntilStockout, 0)) + "</td>" +
+        "<td class=\"num\">" + fmt(r.stats.forecastHorizon, 0) + "</td>" +
+        "<td class=\"num\">" + fmt(r.stats.recommendedOrder, 0) + "</td>" +
+        "<td><span class=\"status-tag " + statusClass + "\"><span class=\"dot\"></span>" + statusLabel + "</span></td>";
+
+      tr.addEventListener("click", function () {
+        selectedSku = r.sku;
+        viewMode = "single";
+        applyViewMode();
+        renderAll();
+      });
+
+      tableBody.appendChild(tr);
+    });
+
+    skuSelect.innerHTML = skuOrder.map(function (sku) {
+      return "<option value=\"" + escapeHtml(sku) + "\"" + (sku === selectedSku ? " selected" : "") + ">" + escapeHtml(sku) + "</option>";
+    }).join("");
+  }
+
+  // ---------------- Chart rendering ----------------
+
+  // Shared by the single-product chart and every mini chart in the grid
+  // view. Reads the container's own padding so the canvas never sizes
+  // itself wider than the visible content area (the earlier overflow bug).
+  function drawBarChart(canvas, series, avgDaily, opts) {
+    opts = opts || {};
+    var compact = !!opts.compact;
+    var hasPrev = opts.prevSeries && opts.prevSeries.length === series.length;
+
+    var container = canvas.parentElement;
+    var cs = getComputedStyle(container);
+    var padLeft = parseFloat(cs.paddingLeft) || 0;
+    var padRight = parseFloat(cs.paddingRight) || 0;
+    var cssWidth = container.clientWidth - padLeft - padRight;
+    if (cssWidth <= 0) cssWidth = container.clientWidth || 300;
+    var cssHeight = compact ? 110 : 280;
+
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = cssWidth * dpr;
+    canvas.height = cssHeight * dpr;
+    canvas.style.width = cssWidth + "px";
+    canvas.style.height = cssHeight + "px";
+
+    var ctx = canvas.getContext("2d");
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+    if (!series.length) {
+      ctx.fillStyle = "#8A8F87";
+      ctx.font = "13px " + getComputedStyle(document.body).fontFamily;
+      ctx.textAlign = "center";
+      ctx.fillText(t("noDataForPeriod"), cssWidth / 2, cssHeight / 2);
+      ctx.textAlign = "start";
+      canvas._chartMeta = null;
+      return;
+    }
+
+    var padding = compact
+      ? { top: 8, right: 6, bottom: 18, left: 30 }
+      : { top: 16, right: 16, bottom: 48, left: 42 };
+    var plotW = cssWidth - padding.left - padding.right;
+    var plotH = cssHeight - padding.top - padding.bottom;
+    if (plotW <= 0 || plotH <= 0) return;
+
+    var allVals = series.map(function (h) { return h.qty; });
+    if (hasPrev) allVals = allVals.concat(opts.prevSeries.map(function (h) { return h.qty; }));
+    var maxVal = Math.max.apply(null, allVals.concat([avgDaily])) * 1.15;
+    if (maxVal <= 0) maxVal = 1;
+
+    var step = plotW / series.length;
+    var barW, gap;
+    if (hasPrev) {
+      barW = Math.max(1, step * 0.32);
+      gap = step * 0.06;
+    } else {
+      barW = Math.max(1, step * (compact ? 0.7 : 0.6));
+      gap = 0;
+    }
+
+    var fontSize = compact ? 10 : 11;
+    ctx.strokeStyle = "#DBDDD5";
+    ctx.lineWidth = 1;
+    ctx.fillStyle = "#8A8F87";
+    ctx.font = fontSize + "px " + getComputedStyle(document.body).fontFamily;
+
+    var gridLines = compact ? [0, 1] : [0, 0.5, 1];
+    gridLines.forEach(function (f) {
+      var y = padding.top + plotH * (1 - f);
+      ctx.beginPath();
+      ctx.moveTo(padding.left, y);
+      ctx.lineTo(cssWidth - padding.right, y);
+      ctx.stroke();
+      if (!compact) ctx.fillText(Math.round(maxVal * f), 2, y + 4);
+    });
+
+    series.forEach(function (h, i) {
+      if (hasPrev) {
+        var prevQty = opts.prevSeries[i].qty;
+        var xPrev = padding.left + step * i + step / 2 - gap / 2 - barW;
+        var prevBarH = plotH * (prevQty / maxVal);
+        ctx.fillStyle = "#A9BAC4";
+        ctx.fillRect(xPrev, padding.top + plotH - prevBarH, barW, Math.max(prevBarH, 0));
+
+        var xCur = padding.left + step * i + step / 2 + gap / 2;
+        var curBarH = plotH * (h.qty / maxVal);
+        ctx.fillStyle = "#35566B";
+        ctx.fillRect(xCur, padding.top + plotH - curBarH, barW, Math.max(curBarH, 0));
+      } else {
+        var x = padding.left + step * i + (step - barW) / 2;
+        var barH = plotH * (h.qty / maxVal);
+        ctx.fillStyle = "#35566B";
+        ctx.fillRect(x, padding.top + plotH - barH, barW, Math.max(barH, 0));
+      }
+    });
+
+    var avgY = padding.top + plotH * (1 - avgDaily / maxVal);
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = "#B85A26";
+    ctx.lineWidth = compact ? 1 : 1.5;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, avgY);
+    ctx.lineTo(cssWidth - padding.right, avgY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Date labels. The main chart labels every single bar (rotated
+    // vertically so short steps never overlap); compact grid charts keep
+    // a handful of evenly spaced labels since there is little room.
+    ctx.fillStyle = "#8A8F87";
+    if (!compact) {
+      series.forEach(function (h, i) {
+        var x = padding.left + step * i + step / 2;
+        ctx.save();
+        ctx.translate(x, cssHeight - padding.bottom + 6);
+        ctx.rotate(-Math.PI / 2);
+        ctx.textAlign = "right";
+        ctx.fillText(formatShortDate(h.date), 0, 3);
+        ctx.restore();
+      });
+    } else {
+      ctx.textAlign = "center";
+      var labelEvery = Math.max(1, Math.ceil(series.length / 3));
+      series.forEach(function (h, i) {
+        if (i % labelEvery === 0 || i === series.length - 1) {
+          var x2 = padding.left + step * i + step / 2;
+          ctx.fillText(formatShortDate(h.date), x2, cssHeight - 5);
+        }
+      });
+      ctx.textAlign = "start";
+    }
+
+    canvas._chartMeta = { series: series, prevSeries: hasPrev ? opts.prevSeries : null, step: step, paddingLeft: padding.left };
+  }
+
+  function renderSingleChart() {
+    if (!selectedSku || !rangeStart || !rangeEnd) return;
+    dayDetailPanel.classList.add("hidden");
+    dayDetailPanel.innerHTML = "";
+
+    chartTitle.textContent = t("chartTitleSingle") + " — " + selectedSku;
+    var stats = computeStats(selectedSku);
+    var series = buildDaySeries(selectedSku, rangeStart, rangeEnd);
+    var showPrev = prevYearCheckbox.checked;
+    var prevSeries = showPrev ? buildPrevYearSeries(selectedSku, rangeStart, rangeEnd) : null;
+
+    drawBarChart(chartCanvas, series, stats.avgDaily, { compact: false, prevSeries: prevSeries });
+
+    legendPrevYearEl.classList.toggle("hidden", !showPrev);
+    if (showPrev) {
+      var anyPrev = prevSeries.some(function (p) { return p.hasData; });
+      prevYearNote.classList.toggle("hidden", anyPrev);
+    } else {
+      prevYearNote.classList.add("hidden");
+    }
+  }
+
+  function renderGrid() {
+    chartTitle.textContent = t("chartTitleAll");
+    chartGrid.innerHTML = "";
+
+    // Build every card first and only draw once all of them are in the
+    // DOM. Drawing inside the same loop that appends cards was the cause
+    // of the mismatched bar widths: CSS Grid recomputes each card's width
+    // as siblings are added, so a canvas measured mid-loop got sized for
+    // a column count that didn't match the final layout.
+    var pending = [];
+    skuOrder.forEach(function (sku) {
+      var card = document.createElement("div");
+      card.className = "mini";
+      var h3 = document.createElement("h3");
+      h3.textContent = sku;
+      var canvas = document.createElement("canvas");
+      canvas.height = 110;
+      card.appendChild(h3);
+      card.appendChild(canvas);
+      card.addEventListener("click", function () {
+        selectedSku = sku;
+        viewMode = "single";
+        applyViewMode();
+        renderAll();
+      });
+      chartGrid.appendChild(card);
+      pending.push({ sku: sku, canvas: canvas });
+    });
+
+    pending.forEach(function (item) {
+      var stats = computeStats(item.sku);
+      var series = buildDaySeries(item.sku, rangeStart, rangeEnd);
+      drawBarChart(item.canvas, series, stats.avgDaily, { compact: true });
+    });
+  }
+
+  function renderCharts() {
+    if (viewMode === "single") renderSingleChart();
+    else renderGrid();
+  }
+
+  function applyViewMode() {
+    chartSingle.classList.toggle("hidden", viewMode !== "single");
+    chartGrid.classList.toggle("hidden", viewMode !== "all");
+    skuSelect.classList.toggle("hidden", viewMode !== "single");
+    prevYearToggleLabel.classList.toggle("hidden", viewMode !== "single");
+    if (viewMode !== "single") prevYearNote.classList.add("hidden");
+    viewToggleBtn.textContent = viewMode === "single" ? t("viewToggleShowAll") : t("viewToggleShowOne");
+  }
+
+  /* === API-INTEGRATION === */
+
+  function setServerStatus(state, detail) {
+    var el = document.getElementById("server-status");
+    if (!el) return;
+    el.className = "server-status " + state;
+    if (state === "connecting") {
+      el.textContent = "Подключаюсь к модели...";
+    } else if (state === "online") {
+      el.textContent = "Прогноз строит обученная модель";
+    } else {
+      el.textContent = "Модель недоступна — расчёт по простой формуле"
+        + (detail ? " (" + detail + ")" : "");
+    }
+  }
+
+  // Сноска под таблицей должна говорить правду о том, чем считали.
+  function updateFootnote() {
+    var el = document.querySelector(".footnote");
+    if (!el) return;
+    if (usingServer) {
+      el.removeAttribute("data-i18n");   // иначе перевод перезапишет текст
+      el.textContent = "Прогноз строит модель градиентного бустинга, "
+        + "обученная на исторических данных. Страховой запас рассчитан по "
+        + "доверительному интервалу прогноза и экономике товара, а не по "
+        + "фиксированному нормативу. Бейдж у товара показывает, каким "
+        + "методом он посчитан.";
+    }
+  }
+
+  // Поле «Период расчёта спроса» относится к локальной формуле:
+  // когда считает модель, оно ни на что не влияет — прячем, чтобы
+  // не создавать впечатление работающей настройки.
+  function toggleLocalOnlyControls() {
+    var input = document.getElementById("demand-window-input");
+    var label = document.getElementById("demand-window-all-label");
+    var field = input ? input.closest(".field") : null;
+    [field, label].forEach(function (el) {
+      if (el) el.style.display = usingServer ? "none" : "";
+    });
+  }
+
+  // Показывает, что именно сделала очистка с загруженным файлом.
+  function renderServerPanel() {
+    var panel = document.getElementById("clean-report");
+    if (!panel) return;
+
+    toggleLocalOnlyControls();
+    updateFootnote();
+
+    if (!usingServer || !cleaningReport) {
+      panel.style.display = "none";
+      setServerStatus("offline");
+      return;
+    }
+    setServerStatus("online");
+
+    var r = cleaningReport;
+    var items = [
+      ["Прочитано строк", r.rows_read],
+      ["Дублей объединено", r.duplicates_merged],
+      ["Пропущенных дат дозаполнено", r.dates_filled],
+      ["Возвратов обнулено", r.returns_zeroed],
+      ["Выбросов обрезано", r.outliers_winsorized],
+      ["Дней дефицита найдено", r.censored_days]
+    ].filter(function (p) { return p[1]; });
+
+    var html = '<div class="clean-head">Данные обработаны</div><div class="clean-grid">';
+    items.forEach(function (p) {
+      html += '<div class="clean-item"><span class="n">' + p[1] +
+              '</span><span class="l">' + escapeHtml(p[0]) + '</span></div>';
+    });
+    html += '</div>';
+
+    if (r.warnings && r.warnings.length) {
+      html += '<ul class="clean-warn">';
+      r.warnings.forEach(function (w) {
+        html += '<li>' + escapeHtml(w) + '</li>';
+      });
+      html += '</ul>';
+    }
+    if (sessionId) {
+      html += '<a class="clean-log" target="_blank" href="' +
+              apiUrl("/clean-report/text", { session_id: sessionId }) +
+              '">Скачать полный отчёт</a>';
+    }
+    panel.innerHTML = html;
+    panel.style.display = "block";
+  }
+
+  function modeBadge(sku) {
+    var st = serverStats[sku];
+    if (!usingServer || !st) return "";
+    var cls = "badge-ml", text = "модель";
+    if (st.mode === "minmax") { cls = "badge-minmax"; text = "min/max"; }
+    else if (st.mode === "stats") { cls = "badge-stats"; text = "статистика"; }
+    else if (st.mode === "fine_tune") { cls = "badge-ml"; text = "дообучена"; }
+    var meta = serverMeta[sku];
+    var title = meta ? (meta.class_label + " · " + (meta.recommendation || "")) : "";
+    return '<span class="mode-badge ' + cls + '" title="' + escapeHtml(title) +
+           '">' + text + '</span>';
+  }
+
+  function renderAll() {
+    renderTable();
+    renderCharts();
+  }
+
+  // ---------------- Day detail (click a bar) ----------------
+
+  function showDayDetail(entry, prevEntry) {
+    var line1 = tf("daySold", { date: formatFullDate(entry.date), qty: fmt(entry.qty, 0) });
+    var line2 = "";
+    if (prevEntry && prevEntry.hasData) {
+      var prevLine = tf("daySold", { date: formatFullDate(prevEntry.prevDate), qty: fmt(prevEntry.qty, 0) });
+      var pct;
+      if (prevEntry.qty > 0) pct = Math.round(((entry.qty - prevEntry.qty) / prevEntry.qty) * 100);
+      else pct = entry.qty > 0 ? 100 : 0;
+      var changeLine = pct >= 0 ? tf("dayUp", { pct: pct }) : tf("dayDown", { pct: Math.abs(pct) });
+      line2 = prevLine + " " + changeLine;
+    } else if (prevEntry) {
+      line2 = tf("dayNoData", { date: formatFullDate(prevEntry.prevDate) });
+    }
+    dayDetailPanel.innerHTML = "<strong>" + escapeHtml(line1) + "</strong>" + (line2 ? "<br>" + escapeHtml(line2) : "");
+    dayDetailPanel.classList.remove("hidden");
+  }
+
+  chartCanvas.addEventListener("click", function (e) {
+    var meta = chartCanvas._chartMeta;
+    if (!meta) return;
+    var rect = chartCanvas.getBoundingClientRect();
+    var mouseX = e.clientX - rect.left;
+    var idx = Math.floor((mouseX - meta.paddingLeft) / meta.step);
+    if (idx < 0) idx = 0;
+    if (idx > meta.series.length - 1) idx = meta.series.length - 1;
+    showDayDetail(meta.series[idx], meta.prevSeries ? meta.prevSeries[idx] : null);
+  });
+
+  // ---------------- Date range ----------------
+
+  function clampRange(start, end) {
+    if (start < globalMinDate) {
+      var shift = globalMinDate - start;
+      start = new Date(start.getTime() + shift);
+      end = new Date(end.getTime() + shift);
+    }
+    if (end > globalMaxDate) {
+      var shift2 = end - globalMaxDate;
+      start = new Date(start.getTime() - shift2);
+      end = new Date(end.getTime() - shift2);
+    }
+    if (start < globalMinDate) start = new Date(globalMinDate);
+    if (end > globalMaxDate) end = new Date(globalMaxDate);
+    return { start: start, end: end };
+  }
+
+  function updateRangeInputs() {
+    var minStr = isoDate(globalMinDate), maxStr = isoDate(globalMaxDate);
+    rangeFrom.value = isoDate(rangeStart);
+    rangeTo.value = isoDate(rangeEnd);
+    rangeFrom.min = minStr; rangeFrom.max = maxStr;
+    rangeTo.min = minStr; rangeTo.max = maxStr;
+    rangePrev.disabled = isoDate(rangeStart) <= minStr;
+    rangeNext.disabled = isoDate(rangeEnd) >= maxStr;
+  }
+
+  function onRangeInputChange() {
+    var newStart = rangeFrom.value ? parseISODateInput(rangeFrom.value) : rangeStart;
+    var newEnd = rangeTo.value ? parseISODateInput(rangeTo.value) : rangeEnd;
+    if (newStart > newEnd) { var tmp = newStart; newStart = newEnd; newEnd = tmp; }
+    var clamped = clampRange(newStart, newEnd);
+    rangeStart = clamped.start;
+    rangeEnd = clamped.end;
+    updateRangeInputs();
+    renderCharts();
+  }
+
+  function pageRange(direction) {
+    var lengthDays = Math.round((rangeEnd - rangeStart) / 86400000) + 1;
+    var deltaMs = direction * lengthDays * 86400000;
+    var newStart = new Date(rangeStart.getTime() + deltaMs);
+    var newEnd = new Date(rangeEnd.getTime() + deltaMs);
+    var clamped = clampRange(newStart, newEnd);
+    rangeStart = clamped.start;
+    rangeEnd = clamped.end;
+    updateRangeInputs();
+    renderCharts();
+  }
+
+  // ---------------- View switching ----------------
+
+  function showApp() {
+    uploadView.style.display = "none";
+    appView.style.display = "block";
+  }
+
+  function showUpload() {
+    appView.style.display = "none";
+    uploadView.style.display = "block";
+    errorBox.className = "error-box";
+    errorBox.textContent = "";
+    fileInput.value = "";
+  }
+
+  function showError(msg) {
+    errorBox.textContent = msg;
+    errorBox.className = "error-box show";
+  }
+
+  function applyParseResult(result) {
+    if (!result.ok) {
+      showError(result.message);
+      return;
+    }
+    errorBox.className = "error-box";
+    if (result.skippedRows > 0) {
+      showError(tf("skippedRowsMsg", { n: result.skippedRows }));
+    }
+
+    globalMinDate = result.minDate;
+    globalMaxDate = result.maxDate;
+    var windowLen = 30;
+    var candidateStart = addDays(globalMaxDate, -(windowLen - 1));
+    rangeStart = candidateStart < globalMinDate ? new Date(globalMinDate) : candidateStart;
+    rangeEnd = new Date(globalMaxDate);
+    viewMode = "single";
+    prevYearCheckbox.checked = false;
+
+    applyViewMode();
+    updateRangeInputs();
+    showApp();
+    renderAll();
+  }
+
+  function handleFileText(text) {
+    applyParseResult(processCSVText(text));
+  }
+
+  async function handleXLSXFile(file) {
+    try {
+      var buf = await file.arrayBuffer();
+      var rows = await parseXLSXToRows(buf);
+      applyParseResult(processSheetRows(rows));
+    } catch (err) {
+      showError(t("errXlsxParse"));
+    }
+  }
+
+  // Routes a dropped or picked file by extension: .xlsx goes through the
+  // zip/XML reader above, everything else is read as CSV text.
+  function routeFile(file) {
+    if (!file) return;
+    /* === API-INTEGRATION === */
+    // Сначала пробуем сервер с обученной моделью. Не ответил — считаем
+    // сами, как раньше: страница остаётся работоспособной без установки.
+    routeFileViaServer(file);
+  }
+
+  async function routeFileViaServer(file) {
+    setServerStatus("connecting");
+    try {
+      await uploadToServer(file);
+      await loadFromServer();
+      if (!skuOrder.length) throw new Error("Сервер не вернул ни одного товара");
+
+      // дальше — та же инициализация, что и при локальной загрузке
+      var allDates = [];
+      skuOrder.forEach(function (sku) {
+        data[sku].history.forEach(function (h) { allDates.push(h.date); });
+      });
+      globalMinDate = new Date(Math.min.apply(null, allDates));
+      globalMaxDate = new Date(Math.max.apply(null, allDates));
+      var windowLen = 30;
+      var candidateStart = addDays(globalMaxDate, -(windowLen - 1));
+      rangeStart = candidateStart < globalMinDate ? new Date(globalMinDate) : candidateStart;
+      rangeEnd = new Date(globalMaxDate);
+      viewMode = "single";
+      selectedSku = skuOrder[0];
+      if (prevYearCheckbox) prevYearCheckbox.checked = false;
+      errorBox.className = "error-box";
+
+      applyViewMode();
+      updateRangeInputs();
+      showApp();
+      renderAll();
+      renderServerPanel();
+      return;
+    } catch (err) {
+      usingServer = false;
+      sessionId = null;
+      serverStats = {};
+      setServerStatus("offline", err && err.message);
+    }
+    routeFileLocally(file);
+  }
+
+  function routeFileLocally(file) {
+    if (/\.xlsx$/i.test(file.name)) {
+      handleXLSXFile(file);
+    } else {
+      var reader = new FileReader();
+      reader.onload = function (e) { handleFileText(e.target.result); };
+      reader.readAsText(file, "UTF-8");
+    }
+  }
+
+  // ---------------- Language ----------------
+
+  function applyLanguage(lang) {
+    currentLang = lang;
+    langRuBtn.classList.toggle("active", lang === "ru");
+    langEnBtn.classList.toggle("active", lang === "en");
+    document.documentElement.lang = lang;
+    applyStaticText();
+    if (skuOrder.length) {
+      applyViewMode();
+      renderAll();
+    }
+  }
+
+  langRuBtn.addEventListener("click", function () { applyLanguage("ru"); });
+  langEnBtn.addEventListener("click", function () { applyLanguage("en"); });
+
+  // ---------------- Events ----------------
+
+  pickFileBtn.addEventListener("click", function () { fileInput.click(); });
+
+  fileInput.addEventListener("change", function () {
+    routeFile(fileInput.files[0]);
+  });
+
+  ["dragenter", "dragover"].forEach(function (evt) {
+    dropzone.addEventListener(evt, function (e) {
+      e.preventDefault();
+      dropzone.classList.add("drag");
+    });
+  });
+  ["dragleave", "drop"].forEach(function (evt) {
+    dropzone.addEventListener(evt, function (e) {
+      e.preventDefault();
+      dropzone.classList.remove("drag");
+    });
+  });
+  dropzone.addEventListener("drop", function (e) {
+    routeFile(e.dataTransfer.files[0]);
+  });
+
+  sampleBtn.addEventListener("click", function () {
+    var csv = generateSampleCSV();
+    // Prefix a UTF-8 BOM. Without it, Excel on a Russian-locale Windows
+    // machine guesses the file is Windows-1251 and renders Cyrillic as
+    // mojibake, even though the bytes themselves are valid UTF-8.
+    var blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = "sample-sales.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
+
+  horizonSelect.addEventListener("change", function () {
+    horizonDays = parseInt(horizonSelect.value, 10);
+    /* === API-INTEGRATION === */
+    // На сервере другой горизонт — это другой прогноз модели,
+    // а не пересчёт той же формулы, поэтому перезапрашиваем.
+    if (usingServer) { refreshFromServer(); return; }
+    renderAll();
+  });
+
+  leadtimeInput.addEventListener("change", function () {
+    var v = parseInt(leadtimeInput.value, 10);
+    leadTimeDays = (isNaN(v) || v < 1) ? 14 : v;
+    leadtimeInput.value = leadTimeDays;
+    /* === API-INTEGRATION === */
+    if (usingServer) { refreshFromServer(); return; }
+    renderAll();
+  });
+
+  demandWindowInput.addEventListener("change", function () {
+    var v = parseInt(demandWindowInput.value, 10);
+    demandWindowDays = (isNaN(v) || v < 1) ? 30 : v;
+    demandWindowInput.value = demandWindowDays;
+    renderAll();
+  });
+
+  demandWindowAllCheckbox.addEventListener("change", function () {
+    demandWindowAll = demandWindowAllCheckbox.checked;
+    demandWindowInput.disabled = demandWindowAll;
+    renderAll();
+  });
+
+  resetBtn.addEventListener("click", function () {
+    data = {};
+    skuOrder = [];
+    selectedSku = null;
+    globalMinDate = null;
+    globalMaxDate = null;
+    rangeStart = null;
+    rangeEnd = null;
+    viewMode = "single";
+    showUpload();
+  });
+
+  viewToggleBtn.addEventListener("click", function () {
+    viewMode = viewMode === "single" ? "all" : "single";
+    applyViewMode();
+    renderCharts();
+  });
+
+  skuSelect.addEventListener("change", function () {
+    selectedSku = skuSelect.value;
+    renderAll();
+  });
+
+  prevYearCheckbox.addEventListener("change", function () {
+    renderSingleChart();
+  });
+
+  rangeFrom.addEventListener("change", onRangeInputChange);
+  rangeTo.addEventListener("change", onRangeInputChange);
+  rangePrev.addEventListener("click", function () { pageRange(-1); });
+  rangeNext.addEventListener("click", function () { pageRange(1); });
+
+  var resizeTimer = null;
+  window.addEventListener("resize", function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () {
+      if (skuOrder.length) renderCharts();
+    }, 150);
+  });
+
+  applyLanguage("ru");
+
+})();
+</script>
+</body>
+</html>
