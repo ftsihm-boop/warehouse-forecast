@@ -150,18 +150,58 @@ def _simulate(demand: np.ndarray, dates: pd.DatetimeIndex,
     )
 
 
-def backtest_sku(
+def _forecast_path(g: pd.DataFrame, model: QuantileModel | None, split: int,
+                   test_days: int, review_period: int, cover: int
+                   ) -> dict[int, tuple[float, float]]:
+    """
+    Прогноз на каждую дату пересмотра: (медиана, ширина страхового запаса).
+
+    Считается ОДИН раз на товар и переиспользуется для всех проверяемых
+    коэффициентов. Раньше прогноз пересчитывался заново под каждый
+    коэффициент, хотя от коэффициента он не зависит вообще: множитель
+    масштабирует уже готовую разницу (q90 - q50). На сетке из семи
+    значений это ровно в семь раз лишней работы.
+
+    Walk-forward соблюдён: прогноз на день t строится только по данным
+    до t включительно, будущее модели недоступно.
+    """
+    path: dict[int, tuple[float, float]] = {}
+    for t in range(0, test_days, review_period):
+        hist = g.iloc[:split + t]
+        lo_v = hi_v = None
+        if model is not None and len(hist) >= 90:
+            rows = inference_rows(hist, cover)
+            rows = rows[rows[BASE_COL].notna() & (rows[BASE_COL] > 0)]
+            if len(rows):
+                feats = [c for c in (model.features or FEATURE_COLUMNS)
+                         if c in rows.columns]
+                lo, hi = model.predict(rows[feats].fillna(0.0))
+                scale = float(rows[BASE_COL].iloc[0]) * cover
+                lo_v, hi_v = float(lo[0] * scale), float(hi[0] * scale)
+        if lo_v is None:
+            lo_v, hi_v = stats_forecast(hist, cover)
+        path[t] = (lo_v, max(hi_v - lo_v, 0.0))
+    return path
+
+
+def backtest_sku_factors(
     g: pd.DataFrame,
     model: QuantileModel | None,
+    factors: list[float],
     horizon: int = 30,
     lead_time: int = 7,
     review_period: int = 7,
     test_days: int = 180,
     econ: Economics | None = None,
     safety_factor_baseline: float = 1.25,
-    service_factor: float = 1.0,
 ) -> dict:
-    """Бэктест по одному товару: базовая политика против нашей."""
+    """
+    Бэктест одного товара сразу по нескольким коэффициентам запаса.
+
+    Базовая политика и прогноз считаются один раз, дальше прогоняется
+    только дешёвая симуляция склада под каждый коэффициент. Возвращает
+    базовый результат и словарь {коэффициент: результат to-be}.
+    """
     econ = econ or Economics()
     g = g.sort_values(DATE).reset_index(drop=True)
     if len(g) < test_days + 90:
@@ -182,48 +222,57 @@ def backtest_sku(
         return max(target - stock - in_transit, 0.0)
 
     # --- наша политика: прогноз q50 + страховой запас на срок покрытия ------
-    # предрасчёт: прогноз пересматриваем раз в review_period дней,
-    # каждый раз только по данным ДО текущего дня (walk-forward)
-    #
     # service_factor масштабирует ИМЕННО страховой запас (q90 - q50),
     # не трогая медианный прогноз. 1.0 — полный страховой запас под
     # 90% уровень сервиса; 0.5 — половина (меньше запас, чуть больше
     # риск дефицита); 1.5 — перестраховка. Это единственная ручка,
     # которой настраивается баланс «замороженные деньги / упущенные продажи».
-    ml_cover: dict[int, float] = {}
-    for t in range(0, test_days, review_period):
-        hist = g.iloc[:split + t]
-        lo_v = hi_v = None
-        if model is not None and len(hist) >= 90:
-            rows = inference_rows(hist, cover)
-            rows = rows[rows[BASE_COL].notna() & (rows[BASE_COL] > 0)]
-            if len(rows):
-                feats = [c for c in (model.features or FEATURE_COLUMNS)
-                         if c in rows.columns]
-                lo, hi = model.predict(rows[feats].fillna(0.0))
-                scale = float(rows[BASE_COL].iloc[0]) * cover
-                lo_v, hi_v = float(lo[0] * scale), float(hi[0] * scale)
-        if lo_v is None:
-            lo_v, hi_v = stats_forecast(hist, cover)
-        safety = max(hi_v - lo_v, 0.0) * service_factor
-        ml_cover[t] = lo_v + safety
-
-    def ml_order(t, stock, in_transit):
-        key = (t // review_period) * review_period
-        target = ml_cover.get(key, 0.0)
-        return max(target - stock - in_transit, 0.0)
+    path = _forecast_path(g, model, split, test_days, review_period, cover)
 
     init = float(test_demand[:28].mean() * cover) if len(test_demand) >= 28 else None
 
     base = _simulate(test_demand, dates, baseline_order, lead_time,
                      review_period, econ, init)
     base.name = "Ручное планирование (as-is)"
-    ml = _simulate(test_demand, dates, ml_order, lead_time,
-                   review_period, econ, init)
-    ml.name = "ML-прогноз (to-be)"
 
-    return {"sku": g[SKU].iloc[0], "baseline": base.to_dict(), "ml": ml.to_dict(),
-            "days": int(test_days), "demand_total": float(test_demand.sum())}
+    by_factor: dict[float, dict] = {}
+    for f in factors:
+        def ml_order(t, stock, in_transit, _f=f):
+            key = (t // review_period) * review_period
+            lo_v, spread = path.get(key, (0.0, 0.0))
+            return max(lo_v + spread * _f - stock - in_transit, 0.0)
+
+        ml = _simulate(test_demand, dates, ml_order, lead_time,
+                       review_period, econ, init)
+        ml.name = "ML-прогноз (to-be)"
+        by_factor[f] = ml.to_dict()
+
+    return {"sku": g[SKU].iloc[0], "baseline": base.to_dict(),
+            "by_factor": by_factor, "days": int(test_days),
+            "demand_total": float(test_demand.sum())}
+
+
+def backtest_sku(
+    g: pd.DataFrame,
+    model: QuantileModel | None,
+    horizon: int = 30,
+    lead_time: int = 7,
+    review_period: int = 7,
+    test_days: int = 180,
+    econ: Economics | None = None,
+    safety_factor_baseline: float = 1.25,
+    service_factor: float = 1.0,
+) -> dict:
+    """Бэктест по одному товару: базовая политика против нашей."""
+    r = backtest_sku_factors(
+        g, model, [service_factor], horizon=horizon, lead_time=lead_time,
+        review_period=review_period, test_days=test_days, econ=econ,
+        safety_factor_baseline=safety_factor_baseline)
+    if not r:
+        return {}
+    return {"sku": r["sku"], "baseline": r["baseline"],
+            "ml": r["by_factor"][service_factor], "days": r["days"],
+            "demand_total": r["demand_total"]}
 
 
 def backtest(df: pd.DataFrame, model: QuantileModel | None = None,
@@ -305,6 +354,204 @@ def backtest(df: pd.DataFrame, model: QuantileModel | None = None,
     return table, summary
 
 
+def tune_portfolio(
+    df: pd.DataFrame,
+    model: QuantileModel | None = None,
+    econ: Economics | None = None,
+    test_days: int = 90,
+    lead_time: int = 7,
+    review_period: int = 7,
+    max_skus: int | None = None,
+    only_forecastable: bool = True,
+    allow_manual: bool = True,
+    verbose: bool = False,
+) -> dict:
+    """
+    Подбирает страховой запас ПО КАЖДОМУ ТОВАРУ и решает, каким товаром
+    вообще стоит управлять по прогнозу.
+
+    ПОЧЕМУ НЕ ОДИН КОЭФФИЦИЕНТ НА ВЕСЬ АССОРТИМЕНТ
+    ----------------------------------------------
+    Так было раньше, и это оказалось грубой ошибкой. Подбор искал одно
+    число, которое устроит сразу все товары. Но если хотя бы по одному
+    товару прогноз не работает — например, сезонный арбуз, которого
+    модель не видела, — дефицит по нему не закрывается ничем. Подбор
+    честно пытался его закрыть и поднимал коэффициент ГЛОБАЛЬНО: 1.3,
+    2.2, 3.7. Арбузу это не помогало, а все остальные товары получали
+    тройной запас и тонули в стоимости хранения. Итог: система с точным
+    прогнозом показывала убыток.
+
+    Запас — это решение по конкретному товару, а не по портфелю.
+    У молока, арбуза и сигарет разная маржа, разная сезонность и разная
+    предсказуемость, поэтому и коэффициент у каждого свой: он ищется
+    вокруг теоретического оптимума ИМЕННО ЭТОГО товара.
+
+    ПОЧЕМУ СИСТЕМА ИМЕЕТ ПРАВО ОТКАЗАТЬСЯ
+    -------------------------------------
+    Если по товару даже лучший коэффициент проигрывает ручному правилу,
+    навязывать прогноз нечестно и убыточно. Такой товар остаётся на
+    ручном планировании, и система прямо об этом говорит. Знать границы
+    своей применимости — часть работы модели, а не изъян.
+    """
+    from .economics import (MAX_SERVICE_FACTOR, MIN_SERVICE_FACTOR,
+                            derive_sku_economics)
+
+    econ = econ or Economics()
+    if df is None or df.empty:
+        return {}
+
+    cover = lead_time + review_period
+
+    excluded = 0
+    if only_forecastable:
+        profiles = profile_all(df)
+        if not profiles.empty:
+            ok = set(profiles.loc[profiles["forecastable"], "sku"])
+            excluded = int(df[SKU].nunique() - len(ok))
+            df = df[df[SKU].isin(ok)]
+
+    per_sku = df.groupby(SKU).agg(total=(QTY, "sum"), n=(QTY, "size"))
+    eligible = per_sku[per_sku["n"] >= test_days + 90]
+    if eligible.empty:
+        return {}
+    ranked = eligible.sort_values("total", ascending=False)
+    chosen = ranked.index if max_skus is None else ranked.head(max_skus).index
+
+    # теоретический оптимум по каждому товару — центр его личной сетки
+    eco = derive_sku_economics(df, holding_rate_year=econ.holding_rate_year,
+                               cover_days=cover, default_margin=econ.margin)
+    theo_by_sku = ({str(r["sku"]): float(r["service_factor"])
+                    for _, r in eco.iterrows()} if not eco.empty else {})
+
+    def clamp(v: float) -> float:
+        return round(max(MIN_SERVICE_FACTOR, min(MAX_SERVICE_FACTOR, v)), 2)
+
+    rows: list[dict] = []
+    totals = {"baseline": {}, "ml": {}}
+    FIELDS = ("avg_stock_units", "avg_stock_value", "stockout_days",
+              "lost_units", "lost_revenue", "holding_cost",
+              "ordering_cost", "total_cost")
+
+    for sku in chosen:
+        g = df[df[SKU] == sku]
+        theo = theo_by_sku.get(str(sku), 1.0)
+        grid = sorted({clamp(theo * m)
+                       for m in (0.3, 0.5, 0.75, 1.0, 1.3, 1.7, 2.2)})
+
+        r = backtest_sku_factors(g, model, grid, econ=econ, test_days=test_days,
+                                 lead_time=lead_time, review_period=review_period)
+        if not r:
+            continue
+        base = r["baseline"]
+        tolerance = max(base["lost_revenue"] * 1.05, 50.0)
+
+        def evaluate(by_factor: dict) -> list[dict]:
+            out = []
+            for f, m in by_factor.items():
+                out.append({"factor": f, "ml": m,
+                            "effect": base["total_cost"] - m["total_cost"],
+                            "lost": m["lost_revenue"]})
+            return out
+
+        results = evaluate(r["by_factor"])
+
+        def pick(rs: list[dict]) -> dict:
+            # Сначала — варианты, которые не ухудшают дефицит против
+            # текущей практики. Среди них берём самый выгодный. Если
+            # таких нет, берём просто самый выгодный: держать нулевой
+            # дефицит ценой запаса, который стоит дороже самого дефицита,
+            # бессмысленно.
+            safe = [x for x in rs if x["lost"] <= tolerance]
+            return max(safe or rs, key=lambda x: x["effect"])
+
+        # Расширение сетки вверх — только пока это реально улучшает эффект.
+        # Критерий «минимум дефицита любой ценой» убран: именно он раньше
+        # уводил коэффициент в 3.7 и делал систему убыточной.
+        for _ in range(3):
+            edge = max(results, key=lambda x: x["factor"])
+            if pick(results)["factor"] < edge["factor"] - 1e-9:
+                break
+            nxt_f = clamp(edge["factor"] * 1.35)
+            if nxt_f <= edge["factor"] + 1e-9:
+                break
+            extra = backtest_sku_factors(
+                g, model, [nxt_f], econ=econ, test_days=test_days,
+                lead_time=lead_time, review_period=review_period)
+            if not extra:
+                break
+            nxt = evaluate(extra["by_factor"])[0]
+            results.append(nxt)
+            if nxt["effect"] <= edge["effect"]:
+                break
+
+        best = pick(results)
+        policy = "ml"
+        chosen_ml = best["ml"]
+        if allow_manual and best["effect"] <= 0:
+            # система проигрывает ручному правилу — не навязываемся
+            policy = "manual"
+            chosen_ml = dict(base)
+
+        if verbose:
+            print(f"  {str(sku)[:28]:<28} × {best['factor']:.2f} "
+                  f"(теор. {theo:.2f})  {base['total_cost'] - chosen_ml['total_cost']:>8.0f} ₽"
+                  f"  {policy}")
+
+        rows.append({
+            "sku": sku, "factor": best["factor"], "theoretical": round(theo, 2),
+            "policy": policy,
+            "effect": round(base["total_cost"] - chosen_ml["total_cost"]),
+            "effect_if_ml": round(best["effect"]),
+            "lost_baseline": base["lost_revenue"], "lost_ml": chosen_ml["lost_revenue"],
+            "holding_baseline": base["holding_cost"],
+            "holding_ml": chosen_ml["holding_cost"],
+        })
+        for key, res in (("baseline", base), ("ml", chosen_ml)):
+            for f in FIELDS:
+                totals[key][f] = totals[key].get(f, 0.0) + res[f]
+
+    if not rows:
+        return {}
+
+    b, m = totals["baseline"], totals["ml"]
+    managed = [r for r in rows if r["policy"] == "ml"]
+    manual = [r for r in rows if r["policy"] == "manual"]
+    factors = [r["factor"] for r in managed] or [r["factor"] for r in rows]
+
+    summary = {
+        "Период бэктеста, дней": test_days,
+        "Товаров в расчёте эффекта": len(rows),
+        "Исключено (спрос непрогнозируем)": excluded,
+        "Средний остаток as-is, ₽": round(b["avg_stock_value"]),
+        "Средний остаток to-be, ₽": round(m["avg_stock_value"]),
+        "Снижение остатка, %": round(
+            (1 - m["avg_stock_value"] / max(b["avg_stock_value"], 1)) * 100, 1),
+        "Упущенная выручка as-is, ₽": round(b["lost_revenue"]),
+        "Упущенная выручка to-be, ₽": round(m["lost_revenue"]),
+        "Снижение потерь от дефицита, %": (
+            round((1 - m["lost_revenue"] / b["lost_revenue"]) * 100, 1)
+            if b["lost_revenue"] >= 100 else "н/д (потерь почти нет)"),
+        "Затраты на хранение as-is, ₽": round(b["holding_cost"]),
+        "Затраты на хранение to-be, ₽": round(m["holding_cost"]),
+        "Совокупный эффект за период, ₽": round(b["total_cost"] - m["total_cost"]),
+        "Эффект в месяц, ₽": round((b["total_cost"] - m["total_cost"]) / test_days * 30),
+    }
+
+    return {
+        "summary": summary,
+        "per_sku": rows,
+        "managed": len(managed),
+        "manual": len(manual),
+        "manual_skus": [str(r["sku"]) for r in manual],
+        "factor_median": round(float(np.median(factors)), 2),
+        "factor_min": round(float(min(factors)), 2),
+        "factor_max": round(float(max(factors)), 2),
+        "theoretical_median": round(
+            float(np.median([r["theoretical"] for r in rows])), 2),
+        "skus_total_eligible": int(len(ranked)),
+    }
+
+
 def economic_impact(
     df: pd.DataFrame,
     model: QuantileModel | None = None,
@@ -315,6 +562,7 @@ def economic_impact(
     lead_time: int = 7,
     review_period: int = 7,
     tune_skus: int = 10,
+    fit: dict | None = None,
 ) -> dict:
     """
     Экономический эффект для показа в интерфейсе.
@@ -332,52 +580,27 @@ def economic_impact(
     хранение и предотвращённые потери от упущенной выручки —
     ровно то, что требует экономическое обоснование проекта.
     """
-    from .economics import autotune_service_factor
-
     if df is None or df.empty:
         return {}
 
     econ = econ or Economics.from_data(df)
 
-    # берём самые оборотистые товары с достаточной историей
-    per_sku = df.groupby(SKU).agg(total=(QTY, "sum"), n=(QTY, "size"))
-    eligible = per_sku[per_sku["n"] >= test_days + 90]
-    if eligible.empty:
+    if not df.groupby(SKU)[QTY].size().ge(test_days + 90).any():
         return {"error": "Для расчёта эффекта нужно минимум "
                          f"{test_days + 90} дней истории по товару."}
 
-    ranked = eligible.sort_values("total", ascending=False)
-    top = ranked.index if max_skus is None else ranked.head(max_skus).index
-    sample = df[df[SKU].isin(top)]
-
-    # Подбор коэффициента — на подвыборке, эффект — на полном охвате.
-    # Коэффициент общий для всего ассортимента, поэтому его достаточно
-    # настроить на самых оборотистых позициях; гонять ради него сотню
-    # товаров означало бы ждать минуты вместо секунд.
-    tune_top = ranked.head(min(tune_skus, len(ranked))).index
-    tune_sample = df[df[SKU].isin(tune_top)]
-
-    summary = None
-    if service_factor is None:
-        tuned = autotune_service_factor(tune_sample, model, econ=econ,
-                                        max_skus=tune_skus, test_days=test_days,
-                                        lead_time=lead_time,
-                                        review_period=review_period)
-        service_factor = tuned.get("service_factor", 1.0)
-        theoretical = tuned.get("theoretical")
-        # если охват совпал с выборкой подбора, бэктест уже посчитан
-        if len(tune_top) == len(top):
-            summary = tuned.get("best_summary")
-    else:
-        theoretical = None
-
-    if not summary:
-        _table, summary = backtest(sample, model, econ=econ, test_days=test_days,
-                                   horizon=30, lead_time=lead_time,
-                                   review_period=review_period,
-                                   service_factor=service_factor)
-    if not summary:
+    # Запас подбирается по каждому товару отдельно, и по каждому же
+    # решается, стоит ли вообще управлять им по прогнозу.
+    tuned = tune_portfolio(df, model, econ=econ, test_days=test_days,
+                           lead_time=lead_time, review_period=review_period,
+                           max_skus=max_skus,
+                           allow_manual=service_factor is None)
+    if not tuned:
         return {"error": "Не удалось рассчитать эффект на этих данных."}
+
+    summary = tuned["summary"]
+    theoretical = tuned["theoretical_median"]
+    service_factor = tuned["factor_median"]
 
     holding_before = summary["Затраты на хранение as-is, ₽"]
     holding_after = summary["Затраты на хранение to-be, ₽"]
@@ -388,6 +611,12 @@ def economic_impact(
         if before < 100:          # база слишком мала, процент бессмыслен
             return None
         return round((1 - after / before) * 100, 1)
+
+    # Выигрывает ли система вообще. Если нет — интерфейс не должен
+    # показывать это как достижение: отрицательный «процент снижения»
+    # означает рост затрат, и называть его снижением нельзя.
+    effect = summary["Эффект в месяц, ₽"]
+    beneficial = effect > 0
 
     return {
         "period_days": test_days,
@@ -411,13 +640,24 @@ def economic_impact(
         "lost_prevented_pct": pct(lost_before, lost_after),
 
         "total_effect_period": summary["Совокупный эффект за период, ₽"],
-        "effect_per_month": summary["Эффект в месяц, ₽"],
-        "skus_total_eligible": int(len(ranked)),
-        "diagnosis": _diagnose(summary, service_factor, theoretical),
+        "effect_per_month": effect,
+        "beneficial": beneficial,
+        "skus_total_eligible": tuned["skus_total_eligible"],
+
+        # по скольким товарам система реально управляет закупкой, а по
+        # скольким сама отказалась и оставила ручное правило
+        "skus_managed": tuned["managed"],
+        "skus_manual": tuned["manual"],
+        "manual_skus": tuned["manual_skus"][:8],
+        "factor_min": tuned["factor_min"],
+        "factor_max": tuned["factor_max"],
+
+        "diagnosis": _diagnose(summary, service_factor, theoretical, fit, tuned),
     }
 
 
-def _diagnose(summary: dict, factor: float, theoretical: float | None) -> dict:
+def _diagnose(summary: dict, factor: float, theoretical: float | None,
+              fit: dict | None = None, tuned: dict | None = None) -> dict:
     """
     Объясняет, почему эффект получился таким.
 
@@ -434,30 +674,65 @@ def _diagnose(summary: dict, factor: float, theoretical: float | None) -> dict:
     notes: list[str] = []
     level = "ok"
 
-    # Коэффициент сильно выше теоретического — признак смещённого прогноза
+    # Модель уже проверена на этих данных? Тогда списывать всё на
+    # «обучена не на том ассортименте» нельзя — это прямо противоречило бы
+    # сообщению о проверке, которое пользователь видит выше на экране.
+    model_verified = bool(fit and fit.get("checked") and fit.get("suitable"))
+
+    managed = (tuned or {}).get("managed")
+    manual = (tuned or {}).get("manual") or 0
+    manual_names = (tuned or {}).get("manual_skus") or []
+
+    # Система сама отказалась управлять частью ассортимента. Это штатное
+    # и правильное поведение, но пользователь должен понимать, по каким
+    # именно товарам прогноз не применяется и почему.
+    if manual:
+        if level == "ok":
+            level = "warn"
+        names = ", ".join(str(s)[:34] for s in manual_names[:3])
+        tail = f" и ещё {manual - 3}" if manual > 3 else ""
+        notes.append(
+            f"По {manual} товар(ам) система оставила ручное планирование: "
+            f"{names}{tail}. На них прогноз не даёт выигрыша — спрос "
+            "слишком неровный, и любой страховой запас стоит дороже, чем "
+            "экономит. Эти товары в эффект не засчитаны, закупайте их "
+            "как раньше.")
+
     if theoretical and factor > theoretical * 1.6:
         level = "warn"
-        notes.append(
-            "Страховой запас пришлось поднять существенно выше расчётного "
-            "(× {:.2f} против × {:.2f}). Так бывает, когда модель обучена "
-            "на другом ассортименте и занижает спрос по вашим товарам. "
-            "Переобучите её на этом же файле — эффект заметно вырастет."
-            .format(factor, theoretical))
+        if model_verified:
+            notes.append(
+                "Страховой запас пришлось поднять выше расчётного "
+                "(медиана × {:.2f} против × {:.2f}). Прогноз точен, но спрос "
+                "по этим товарам неровный: чтобы покрыть всплески, запаса "
+                "нужно держать больше теоретического."
+                .format(factor, theoretical))
+        else:
+            notes.append(
+                "Страховой запас пришлось поднять выше расчётного "
+                "(медиана × {:.2f} против × {:.2f}). Так бывает, когда модель "
+                "обучена на другом ассортименте и занижает спрос по вашим "
+                "товарам. Переобучите её на этом же файле."
+                .format(factor, theoretical))
 
     if lost_after > max(lost_before * 1.05, 100):
         level = "warn"
         notes.append(
             "Дефицит у системы получился выше, чем при ручном планировании. "
-            "Это тоже указывает на смещённый прогноз: модель недооценивает "
+            "Это указывает на смещённый прогноз: модель недооценивает "
             "спрос, и запаса не хватает.")
 
     if effect <= 0:
         level = "bad"
         notes.append(
-            "На этих данных система пока не выигрывает у ручного "
-            "планирования. Главное, что стоит сделать, — обучить модель "
-            "на этом файле.")
-    elif effect < 500:
+            "На этих данных система не выигрывает у ручного планирования "
+            "ни по одному товару — внедрять её здесь не нужно. "
+            "Проверьте закупочные цены и срок поставки в форме: расчёт "
+            "опирается именно на них."
+            if model_verified else
+            "На этих данных система не выигрывает у ручного планирования. "
+            "Главное, что стоит сделать, — обучить модель на этом файле.")
+    elif managed and effect < 500:
         if level == "ok":
             level = "warn"
         notes.append(
@@ -466,8 +741,11 @@ def _diagnose(summary: dict, factor: float, theoretical: float | None) -> dict:
             "напрямую зависит расчёт.")
 
     if not notes:
-        notes.append(
-            "Система устойчиво выигрывает у ручного планирования: "
-            "запас меньше, дефицита не больше.")
+        managed_txt = (f"По всем {managed} товарам прогноз выгоднее ручного "
+                       "планирования: " if managed else "")
+        notes.append(managed_txt + "запас меньше, дефицита не больше.")
+    elif effect > 0 and managed:
+        notes.insert(0, f"По {managed} товар(ам) закупка идёт по прогнозу, "
+                        f"и на них система выигрывает у ручного планирования.")
 
     return {"level": level, "notes": notes}

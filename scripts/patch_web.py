@@ -60,16 +60,61 @@ CLIENT_CODE = '''  /* === API-INTEGRATION === */
     return qs ? u + "?" + qs : u;
   }
 
+  // --- индикатор обработки --------------------------------------------------
+  // Обработка файла идёт на сервере и занимает секунды: разбор таблицы,
+  // чистка, дообучение модели. Без индикатора пользователь видит пустой
+  // экран и не понимает, работает сайт или завис.
+  //
+  // Прогресс здесь настоящий, а не нарисованный таймером: сервер отмечает
+  // каждый реальный этап, а страница их опрашивает и показывает.
+  var progressTimer = null;
+
+  function showProgress(stage, pct) {
+    var box = document.getElementById("upload-progress");
+    if (!box) return;
+    box.style.display = "";
+    var s = document.getElementById("up-stage");
+    var f = document.getElementById("up-fill");
+    var p = document.getElementById("up-pct");
+    if (s && stage) s.textContent = stage;
+    if (f) f.style.width = Math.max(0, Math.min(100, pct)) + "%";
+    if (p) p.textContent = Math.round(pct) + " %";
+  }
+
+  function hideProgress() {
+    if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+    var box = document.getElementById("upload-progress");
+    if (box) box.style.display = "none";
+  }
+
+  function pollProgress(uid) {
+    if (progressTimer) clearInterval(progressTimer);
+    progressTimer = setInterval(async function () {
+      try {
+        var r = await fetch(apiUrl("/upload-progress", { uid: uid }));
+        if (!r.ok) return;
+        var d = await r.json();
+        if (d && d.stage) showProgress(d.stage, d.pct || 0);
+      } catch (e) { /* сеть моргнула — просто ждём следующего опроса */ }
+    }, 400);
+  }
+
   // Загружает файл на сервер. Возвращает true, если модель приняла файл.
   async function uploadToServer(file) {
     var fd = new FormData();
     fd.append("file", file);
-    var res = await fetch(API_BASE + "/upload", { method: "POST", body: fd });
+    var uid = "u" + Date.now() + Math.random().toString(16).slice(2, 8);
+    showProgress("Отправляю файл на сервер…", 3);
+    pollProgress(uid);
+    var res = await fetch(apiUrl("/upload", { uid: uid }),
+                          { method: "POST", body: fd });
+    if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
     if (!res.ok) {
       var detail = "";
       try { detail = (await res.json()).detail || ""; } catch (e) { /* пусто */ }
       throw new Error(detail || ("Сервер вернул " + res.status));
     }
+    showProgress("Строю прогноз и готовлю таблицу…", 95);
     var out = await res.json();
     sessionId = out.session_id;
     cleaningReport = out.report;
@@ -230,8 +275,10 @@ ROUTE_NEW = """  function routeFile(file) {
       showApp();
       renderAll();
       renderServerPanel();
+      hideProgress();
       return;
     } catch (err) {
+      hideProgress();
       usingServer = false;
       sessionId = null;
       serverStats = {};
@@ -370,9 +417,12 @@ PANEL_CODE = '''  /* === API-INTEGRATION === */
 
     var sel = document.getElementById("impact-scope");
     var wide = sel && (sel.value === "all" || parseInt(sel.value, 10) > 10);
-    panel.innerHTML = '<div class="impact-loading">Считаю эффект на вашей '
-      + 'истории продаж' + (wide ? ' по расширенному охвату — это может занять '
-      + 'минуту и дольше' : ' — это занимает около 30 секунд') + '...</div>';
+    panel.innerHTML = '<div class="impact-loading">'
+      + '<span class="up-spinner"></span>'
+      + '<span>Считаю эффект на вашей истории продаж'
+      + (wide ? ' по расширенному охвату — это может занять минуту и дольше'
+              : ' — это занимает около 30 секунд')
+      + '. Страховой запас подбирается по каждому товару отдельно.</span></div>';
 
     try {
       var scopeSel = document.getElementById("impact-scope");
@@ -384,35 +434,59 @@ PANEL_CODE = '''  /* === API-INTEGRATION === */
       var d = await res.json();
       if (d.error) { panel.innerHTML = '<div class="impact-loading">' + escapeHtml(d.error) + '</div>'; return; }
 
-      var pctText = function (v) {
-        return (v === null || v === undefined) ? "—" : fmt(v, 1) + " %";
-      };
       var money = function (v) { return fmt(v, 0) + " \\u20BD"; };
 
+      // Отрицательный «процент снижения» означает РОСТ. Называть рост
+      // снижением нельзя — карточка должна говорить то, что произошло
+      // на самом деле, и окрашиваться соответственно.
+      var metric = function (pct, labelDown, labelUp) {
+        if (pct === null || pct === undefined) {
+          return { num: "—", lab: labelDown, cls: "" };
+        }
+        var grew = pct < 0;
+        return {
+          num: fmt(Math.abs(pct), 1) + " %",
+          lab: grew ? labelUp : labelDown,
+          cls: grew ? "bad" : "good"
+        };
+      };
+
+      var mHold = metric(d.holding_saved_pct,
+                         "снижение затрат на хранение",
+                         "рост затрат на хранение");
+      var mLost = metric(d.lost_prevented_pct,
+                         "предотвращённые потери от дефицита",
+                         "рост потерь от дефицита");
+      var mStock = metric(d.stock_reduced_pct,
+                          "снижение товарного остатка",
+                          "рост товарного остатка");
+
       var html = '<div class="impact-cards">';
-      html += '<div class="impact-card good">'
-        + '<div class="ic-num">' + pctText(d.holding_saved_pct) + '</div>'
-        + '<div class="ic-lab">снижение затрат на хранение</div>'
-        + '<div class="ic-sub">' + money(d.holding_before) + ' → '
-        + money(d.holding_after) + '</div></div>';
+      [[mHold, d.holding_before, d.holding_after],
+       [mLost, d.lost_before, d.lost_after],
+       [mStock, d.stock_before, d.stock_after]].forEach(function (row) {
+        var m = row[0];
+        html += '<div class="impact-card ' + m.cls + '">'
+          + '<div class="ic-num">' + m.num + '</div>'
+          + '<div class="ic-lab">' + m.lab + '</div>'
+          + '<div class="ic-sub">' + money(row[1]) + ' → '
+          + money(row[2]) + '</div></div>';
+      });
 
-      html += '<div class="impact-card good">'
-        + '<div class="ic-num">' + pctText(d.lost_prevented_pct) + '</div>'
-        + '<div class="ic-lab">предотвращённые потери от дефицита</div>'
-        + '<div class="ic-sub">' + money(d.lost_before) + ' → '
-        + money(d.lost_after) + '</div></div>';
-
-      html += '<div class="impact-card">'
-        + '<div class="ic-num">' + pctText(d.stock_reduced_pct) + '</div>'
-        + '<div class="ic-lab">снижение товарного остатка</div>'
-        + '<div class="ic-sub">' + money(d.stock_before) + ' → '
-        + money(d.stock_after) + '</div></div>';
-
-      html += '<div class="impact-card accent">'
+      var effGood = d.beneficial !== false && d.effect_per_month > 0;
+      html += '<div class="impact-card ' + (effGood ? 'accent' : 'bad') + '">'
         + '<div class="ic-num">' + money(d.effect_per_month) + '</div>'
-        + '<div class="ic-lab">совокупный эффект в месяц</div>'
+        + '<div class="ic-lab">'
+        + (effGood ? 'совокупный эффект в месяц'
+                   : 'система дороже ручного планирования') + '</div>'
         + '<div class="ic-sub">за период ' + money(d.total_effect_period) + '</div></div>';
       html += '</div>';
+
+      if (!effGood) {
+        html += '<div class="impact-verdict">На этих данных внедрять систему '
+          + 'невыгодно: суммарные затраты получаются выше, чем при ручном '
+          + 'планировании закупок.</div>';
+      }
 
       var diag = d.diagnosis || {};
       if (diag.notes && diag.notes.length) {
@@ -431,8 +505,14 @@ PANEL_CODE = '''  /* === API-INTEGRATION === */
         + 'и как это делает система. Закупочная цена ' + money(d.unit_cost)
         + ', наценка ' + fmt(d.margin * 100, 1) + ' % — '
         + (d.prices_from_file === 0 ? 'оценка' : 'из вашего файла') + '. '
-        + 'Страховой запас × ' + d.service_factor
-        + (d.theoretical_factor ? ' (теоретический оптимум × ' + d.theoretical_factor + ')' : '')
+        + 'Страховой запас подбирается по каждому товару отдельно: '
+        + 'от × ' + d.factor_min + ' до × ' + d.factor_max
+        + ', медиана × ' + d.service_factor
+        + (d.theoretical_factor ? ' (теоретический ориентир × ' + d.theoretical_factor + ')' : '')
+        + '. Закупкой по прогнозу система управляет по ' + d.skus_managed
+        + ' товарам'
+        + (d.skus_manual ? ', ещё ' + d.skus_manual
+             + ' оставлены на ручном планировании' : '')
         + '.</p>';
 
       panel.innerHTML = html;
@@ -556,10 +636,56 @@ HTML_CODE = '''    <!-- === API-INTEGRATION === -->
 
     <div class="stats-row">'''
 
+# --- 7b. Индикатор обработки — в экране загрузки ---------------------------
+# Важно именно здесь, а не рядом с остальной панелью: блок с результатами
+# лежит внутри app-view, который до окончания загрузки скрыт. Индикатор,
+# спрятанный вместе с ним, пользователь никогда бы не увидел — а нужен он
+# ровно в те секунды, пока файл обрабатывается.
+PROGRESS_ANCHOR = '''    <div class="error-box" id="error-box"></div>'''
+PROGRESS_HTML = '''    <div id="upload-progress" class="upload-progress" style="display:none">
+      <div class="up-row">
+        <div class="up-spinner"></div>
+        <div class="up-texts">
+          <div id="up-stage" class="up-stage">Принимаю файл…</div>
+          <div class="up-note">Файл обрабатывается на сервере. Обычно это занимает 10–30 секунд: модель дообучается на ваших данных, чтобы прогноз был точным именно по вашему ассортименту.</div>
+        </div>
+        <div id="up-pct" class="up-pct">0 %</div>
+      </div>
+      <div class="up-bar"><div id="up-fill" class="up-fill"></div></div>
+    </div>
+'''
+
 # --- 8. Стили -----------------------------------------------------------------
 CSS_ANCHOR = "</style>"
 CSS_CODE = '''
   /* === API-INTEGRATION === */
+  .upload-progress {
+    background: #F7F9FB; border: 1px solid #DDE4EA; border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 14px;
+  }
+  .up-row { display: flex; align-items: flex-start; gap: 12px; }
+  .up-texts { flex: 1; min-width: 0; }
+  .up-stage { font-size: 14px; font-weight: 600; color: #223240; }
+  .up-note { font-size: 12px; color: #6B7C8A; margin-top: 3px; line-height: 1.45; }
+  .up-pct {
+    font-size: 15px; font-weight: 700; color: #2C5A8A;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .up-bar {
+    height: 6px; background: #E3E9EE; border-radius: 4px;
+    margin-top: 11px; overflow: hidden;
+  }
+  .up-fill {
+    height: 100%; width: 0%; background: #3B7DBF; border-radius: 4px;
+    transition: width .35s ease;
+  }
+  .up-spinner {
+    width: 18px; height: 18px; flex: none; margin-top: 1px;
+    border: 2px solid #C9D6E0; border-top-color: #3B7DBF;
+    border-radius: 50%; animation: up-spin .8s linear infinite;
+  }
+  @keyframes up-spin { to { transform: rotate(360deg); } }
+
   .server-status {
     font-size: 13px; padding: 7px 12px; border-radius: 7px;
     margin-bottom: 12px; display: inline-block;
@@ -618,7 +744,10 @@ CSS_CODE = '''
   }
   .impact-btn:hover { background: #2A4759; }
   .impact-btn:disabled { opacity: .55; cursor: default; }
-  .impact-loading { font-size: 13px; color: #6B7C88; padding: 14px 0 4px; }
+  .impact-loading {
+    font-size: 13px; color: #6B7C88; padding: 14px 0 4px;
+    display: flex; align-items: center; gap: 9px;
+  }
   .impact-cards {
     display: flex; flex-wrap: wrap; gap: 14px; margin-top: 16px;
   }
@@ -631,6 +760,13 @@ CSS_CODE = '''
   .impact-card .ic-num { font-size: 21px; font-weight: 600; color: #2A3B47; }
   .impact-card .ic-lab { font-size: 12px; color: #55666F; margin-top: 3px; line-height: 1.35; }
   .impact-card .ic-sub { font-size: 11px; color: #8394A0; margin-top: 6px; }
+  .impact-card.bad { background: #F8ECEA; border-color: #E8CFC9; }
+  .impact-card.bad .ic-num { color: #8A3A2A; }
+  .impact-verdict {
+    margin-top: 14px; padding: 11px 13px; border-radius: 8px;
+    background: #F8ECEA; color: #8A3A2A; font-size: 13px; line-height: 1.5;
+    font-weight: 500;
+  }
   .impact-controls { display: flex; align-items: center; gap: 10px; }
   .impact-controls label { font-size: 12px; color: #6B7C88; }
   .impact-controls select {
@@ -672,8 +808,186 @@ def apply(text: str) -> tuple[str, list[str]]:
     text = once(text, HORIZON_OLD, HORIZON_NEW, "перезапрос при смене горизонта")
     text = once(text, LEADTIME_OLD, LEADTIME_NEW, "перезапрос при смене срока поставки")
     text = once(text, HTML_ANCHOR, HTML_CODE, "разметка панели")
+    text = once(text, PROGRESS_ANCHOR, PROGRESS_HTML + PROGRESS_ANCHOR,
+                "индикатор в экране загрузки")
     text = once(text, CSS_ANCHOR, CSS_CODE, "стили")
     return text, applied
+
+
+# --- 9. Обновление уже подключённого сайта ------------------------------------
+# Патчер идемпотентен: повторный запуск не ломает файл. Но у идемпотентности
+# есть оборотная сторона — если САМА правка изменилась, её прежний вариант
+# уже стоит в файле, якорь для новой не находится, и сайт молча остаётся
+# старым. Чинилось это раньше пересборкой из исходного index.html, которого
+# после первой правки уже нет.
+#
+# Поэтому изменённые куски перечислены отдельно, парами «что было — что
+# должно стать». При повторном запуске они заменяются точечно, и сайт
+# обновляется без исходника.
+UPGRADES: list[tuple[str, str, str]] = [
+    # индикатор обработки файла
+    ("""  // Загружает файл на сервер. Возвращает true, если модель приняла файл.
+  async function uploadToServer(file) {
+    var fd = new FormData();
+    fd.append("file", file);
+    var res = await fetch(API_BASE + "/upload", { method: "POST", body: fd });
+    if (!res.ok) {""",
+     """  // --- индикатор обработки --------------------------------------------------
+  // Обработка файла идёт на сервере и занимает секунды: разбор таблицы,
+  // чистка, дообучение модели. Без индикатора пользователь видит пустой
+  // экран и не понимает, работает сайт или завис.
+  //
+  // Прогресс здесь настоящий, а не нарисованный таймером: сервер отмечает
+  // каждый реальный этап, а страница их опрашивает и показывает.
+  var progressTimer = null;
+
+  function showProgress(stage, pct) {
+    var box = document.getElementById("upload-progress");
+    if (!box) return;
+    box.style.display = "";
+    var s = document.getElementById("up-stage");
+    var f = document.getElementById("up-fill");
+    var p = document.getElementById("up-pct");
+    if (s && stage) s.textContent = stage;
+    if (f) f.style.width = Math.max(0, Math.min(100, pct)) + "%";
+    if (p) p.textContent = Math.round(pct) + " %";
+  }
+
+  function hideProgress() {
+    if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+    var box = document.getElementById("upload-progress");
+    if (box) box.style.display = "none";
+  }
+
+  function pollProgress(uid) {
+    if (progressTimer) clearInterval(progressTimer);
+    progressTimer = setInterval(async function () {
+      try {
+        var r = await fetch(apiUrl("/upload-progress", { uid: uid }));
+        if (!r.ok) return;
+        var d = await r.json();
+        if (d && d.stage) showProgress(d.stage, d.pct || 0);
+      } catch (e) { /* сеть моргнула — просто ждём следующего опроса */ }
+    }, 400);
+  }
+
+  // Загружает файл на сервер. Возвращает true, если модель приняла файл.
+  async function uploadToServer(file) {
+    var fd = new FormData();
+    fd.append("file", file);
+    var uid = "u" + Date.now() + Math.random().toString(16).slice(2, 8);
+    showProgress("Отправляю файл на сервер…", 3);
+    pollProgress(uid);
+    var res = await fetch(apiUrl("/upload", { uid: uid }),
+                          { method: "POST", body: fd });
+    if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+    if (!res.ok) {""",
+     "индикатор обработки файла"),
+
+    ("""    var out = await res.json();
+    sessionId = out.session_id;""",
+     """    showProgress("Строю прогноз и готовлю таблицу…", 95);
+    var out = await res.json();
+    sessionId = out.session_id;""",
+     "этап подготовки интерфейса"),
+
+    ("""      renderServerPanel();
+      return;
+    } catch (err) {
+      usingServer = false;""",
+     """      renderServerPanel();
+      hideProgress();
+      return;
+    } catch (err) {
+      hideProgress();
+      usingServer = false;""",
+     "скрытие индикатора"),
+
+    (PROGRESS_ANCHOR, PROGRESS_HTML + PROGRESS_ANCHOR, "разметка индикатора"),
+
+    ("""  .server-status {
+    font-size: 13px;""",
+     """  .upload-progress {
+    background: #F7F9FB; border: 1px solid #DDE4EA; border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 14px;
+  }
+  .up-row { display: flex; align-items: flex-start; gap: 12px; }
+  .up-texts { flex: 1; min-width: 0; }
+  .up-stage { font-size: 14px; font-weight: 600; color: #223240; }
+  .up-note { font-size: 12px; color: #6B7C8A; margin-top: 3px; line-height: 1.45; }
+  .up-pct {
+    font-size: 15px; font-weight: 700; color: #2C5A8A;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .up-bar {
+    height: 6px; background: #E3E9EE; border-radius: 4px;
+    margin-top: 11px; overflow: hidden;
+  }
+  .up-fill {
+    height: 100%; width: 0%; background: #3B7DBF; border-radius: 4px;
+    transition: width .35s ease;
+  }
+  .up-spinner {
+    width: 18px; height: 18px; flex: none; margin-top: 1px;
+    border: 2px solid #C9D6E0; border-top-color: #3B7DBF;
+    border-radius: 50%; animation: up-spin .8s linear infinite;
+  }
+  @keyframes up-spin { to { transform: rotate(360deg); } }
+
+  .server-status {
+    font-size: 13px;""",
+     "стили индикатора"),
+
+    # потоварный подбор запаса — подписи под карточками
+    ("""    panel.innerHTML = '<div class="impact-loading">Считаю эффект на вашей '
+      + 'истории продаж' + (wide ? ' по расширенному охвату — это может занять '
+      + 'минуту и дольше' : ' — это занимает около 30 секунд') + '...</div>';""",
+     """    panel.innerHTML = '<div class="impact-loading">'
+      + '<span class="up-spinner"></span>'
+      + '<span>Считаю эффект на вашей истории продаж'
+      + (wide ? ' по расширенному охвату — это может занять минуту и дольше'
+              : ' — это занимает около 30 секунд')
+      + '. Страховой запас подбирается по каждому товару отдельно.</span></div>';""",
+     "ожидание расчёта эффекта"),
+
+    ("""  .impact-loading { font-size: 13px; color: #6B7C88; padding: 14px 0 4px; }""",
+     """  .impact-loading {
+    font-size: 13px; color: #6B7C88; padding: 14px 0 4px;
+    display: flex; align-items: center; gap: 9px;
+  }""",
+     "стиль ожидания расчёта"),
+
+    ("""        + (d.prices_from_file === 0 ? 'оценка' : 'из вашего файла') + '. '
+        + 'Страховой запас × ' + d.service_factor
+        + (d.theoretical_factor ? ' (теоретический оптимум × ' + d.theoretical_factor + ')' : '')
+        + '.</p>';""",
+     """        + (d.prices_from_file === 0 ? 'оценка' : 'из вашего файла') + '. '
+        + 'Страховой запас подбирается по каждому товару отдельно: '
+        + 'от × ' + d.factor_min + ' до × ' + d.factor_max
+        + ', медиана × ' + d.service_factor
+        + (d.theoretical_factor ? ' (теоретический ориентир × ' + d.theoretical_factor + ')' : '')
+        + '. Закупкой по прогнозу система управляет по ' + d.skus_managed
+        + ' товарам'
+        + (d.skus_manual ? ', ещё ' + d.skus_manual
+             + ' оставлены на ручном планировании' : '')
+        + '.</p>';""",
+     "подпись про потоварный запас"),
+]
+
+
+def upgrade(text: str) -> tuple[str, list[str]]:
+    """Точечно обновляет уже подключённый сайт до актуальных правок."""
+    done: list[str] = []
+    for old, new, name in UPGRADES:
+        if new in text:
+            continue            # уже актуально
+        if old not in text:
+            print(f"  ПРОПУЩЕНО: {name} — прежний вариант не найден",
+                  file=sys.stderr)
+            continue
+        text = text.replace(old, new, 1)
+        done.append(name)
+    return text, done
 
 
 def main() -> None:
@@ -682,7 +996,14 @@ def main() -> None:
     text = SRC.read_text(encoding="utf-8")
 
     if MARKER in text:
-        print("Сайт уже подключён к модели — ничего не меняю.")
+        text, done = upgrade(text)
+        if not done:
+            print("Сайт уже подключён к модели и актуален — ничего не меняю.")
+            return
+        SRC.write_text(text, encoding="utf-8")
+        print(f"Сайт обновлён, правок: {len(done)}")
+        for d in done:
+            print(f"  ~ {d}")
         return
 
     text, applied = apply(text)

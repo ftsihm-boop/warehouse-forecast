@@ -59,6 +59,38 @@ MODEL_DIR = ROOT / "models" / "global"
 MAX_UPLOAD = 25 * 1024 * 1024
 SESSION_TTL = timedelta(hours=4)
 
+# --- отслеживание этапов обработки файла ----------------------------------
+# Загрузка занимает секунды, а дообучение модели — ещё несколько, и всё
+# это время пользователь видел пустой экран и не понимал, завис сайт или
+# работает. Крутилка «просто подождите» тут не годится: непонятно, ждать
+# секунду или минуту.
+#
+# Поэтому обработчик отмечает реальные этапы, а страница их опрашивает.
+# Прогресс настоящий: он отражает то, что сервер делает прямо сейчас,
+# а не таймер, нарисованный в браузере.
+PROGRESS: dict[str, dict] = {}
+PROGRESS_LOCK = threading.Lock()
+PROGRESS_TTL = timedelta(minutes=10)
+
+
+def _progress(uid: str | None, stage: str, pct: int) -> None:
+    if not uid:
+        return
+    with PROGRESS_LOCK:
+        PROGRESS[uid] = {"stage": stage, "pct": pct,
+                         "ts": datetime.utcnow().isoformat()}
+        if len(PROGRESS) > 200:
+            cutoff = datetime.utcnow() - PROGRESS_TTL
+            for k in [k for k, v in PROGRESS.items()
+                      if datetime.fromisoformat(v["ts"]) < cutoff]:
+                PROGRESS.pop(k, None)
+
+
+def h_upload_progress(q) -> dict:
+    uid = (q.get("uid") or [""])[0]
+    with PROGRESS_LOCK:
+        return dict(PROGRESS.get(uid) or {"stage": "Готовлюсь…", "pct": 0})
+
 SESSIONS: dict[str, dict] = {}
 SESSION_LOCK = threading.Lock()
 MODEL: QuantileModel | None = None
@@ -253,7 +285,8 @@ def h_economic_impact(q) -> dict:
         return s[key]
 
     out = _jsonable(economic_impact(s["df"], _model_for(s), max_skus=scope,
-                                    lead_time=lead, review_period=review))
+                                    lead_time=lead, review_period=review,
+                                    fit=s.get("fit")))
     s[key] = out
     # сохраняем последний расчёт, чтобы он попал в текстовый отчёт
     s["last_impact"] = out
@@ -270,6 +303,7 @@ ROUTES = {
     "/economics": h_economics,
     "/clean-report": h_clean_report,
     "/economic-impact": h_economic_impact,
+    "/upload-progress": h_upload_progress,
 }
 
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -316,8 +350,16 @@ def _impact_to_text(d: dict) -> str:
         f"  закупочная цена:              {money(d.get('unit_cost', 0))}",
         f"  наценка:                      {d.get('margin', 0) * 100:.1f} %",
         f"  страховой запас:              \u00d7 {d.get('service_factor')}"
-        + (f" (теоретический оптимум \u00d7 {d.get('theoretical_factor')})"
+        + f" (медиана; по товарам от \u00d7 {d.get('factor_min')} "
+          f"до \u00d7 {d.get('factor_max')})"
+        + (f", ориентир \u00d7 {d.get('theoretical_factor')}"
            if d.get("theoretical_factor") else ""),
+        "",
+        "УПРАВЛЕНИЕ ЗАКУПКОЙ",
+        f"  по прогнозу:                  {d.get('skus_managed', 0)} товар(ов)",
+        f"  оставлено на ручном:          {d.get('skus_manual', 0)} товар(ов)"
+        + ("\n    " + ", ".join(str(s) for s in (d.get("manual_skus") or []))
+           if d.get("manual_skus") else ""),
         "",
         "  Метод: история прогнана дважды — как если бы закупками управляли",
         "  вручную (средний спрос за 28 дней с запасом прочности 1.25) и как",
@@ -435,6 +477,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"detail": f"Ошибка сервера: {e}"}, 500)
 
     def _handle_upload(self) -> None:
+        uid = (parse_qs(urlparse(self.path).query).get("uid") or [""])[0]
+        _progress(uid, "Принимаю файл…", 5)
+
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0:
             raise ApiError(400, "Пустой запрос.")
@@ -457,6 +502,7 @@ class Handler(BaseHTTPRequestHandler):
         if payload is None:
             raise ApiError(400, "В запросе нет файла.")
 
+        _progress(uid, "Разбираю таблицу и распознаю колонки…", 15)
         try:
             ingested = read_table(payload, filename)
         except IngestError as e:
@@ -464,6 +510,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001
             raise ApiError(422, f"Не удалось разобрать файл: {e}") from e
 
+        _progress(uid, "Чищу данные: дубли, выбросы, пропуски…", 30)
         df, report = clean(ingested)
         if df.empty:
             raise ApiError(422, "После очистки не осталось пригодных данных.")
@@ -474,6 +521,7 @@ class Handler(BaseHTTPRequestHandler):
         # усреднённый по чужому.
         session_model, fit = None, None
         if MODEL is not None:
+            _progress(uid, "Дообучаю модель на ваших данных…", 45)
             try:
                 session_model, fit_report = adapt_to_data(df, MODEL)
                 fit = fit_report.to_dict()
@@ -483,6 +531,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001
                 print(f"  проверка модели не удалась: {e}")
 
+        _progress(uid, "Готовлю прогноз…", 90)
         _gc_sessions()
         sid = uuid.uuid4().hex
         with SESSION_LOCK:
@@ -490,6 +539,7 @@ class Handler(BaseHTTPRequestHandler):
                              "model": session_model, "fit": fit,
                              "created": datetime.utcnow()}
 
+        _progress(uid, "Готово", 100)
         self._json({"session_id": sid, "filename": filename,
                     "columns_detected": ingested.mapping,
                     "report": _jsonable(report.to_dict()),
