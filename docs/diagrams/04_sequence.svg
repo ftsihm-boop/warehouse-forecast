@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1300" height="798" viewBox="0 32 1300 798" font-family="'Segoe UI', 'PT Sans', Arial, sans-serif">
+<rect y="32" width="1300" height="830" fill="#FFFFFF"/>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8FA3B5"/></marker>
+<marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10" fill="none" stroke="#8FA3B5" stroke-width="1.4"/></marker>
+</defs>
+<rect x="22" y="66" width="176" height="42" rx="7" fill="#F1F3F5" stroke="#B9C3CC" stroke-width="1.5"/>
+<text x="110" y="93" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1F2D3A">Менеджер</text>
+<line x1="110" y1="108" x2="110" y2="782" stroke="#8FA3B5" stroke-width="1.1" stroke-dasharray="5 5"/>
+<rect x="212" y="66" width="176" height="42" rx="7" fill="#F1F3F5" stroke="#B9C3CC" stroke-width="1.5"/>
+<text x="300" y="93" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1F2D3A">Браузер</text>
+<line x1="300" y1="108" x2="300" y2="782" stroke="#8FA3B5" stroke-width="1.1" stroke-dasharray="5 5"/>
+<rect x="432" y="66" width="176" height="42" rx="7" fill="#F1F3F5" stroke="#B9C3CC" stroke-width="1.5"/>
+<text x="520" y="93" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1F2D3A">HTTP-сервер</text>
+<line x1="520" y1="108" x2="520" y2="782" stroke="#8FA3B5" stroke-width="1.1" stroke-dasharray="5 5"/>
+<rect x="642" y="66" width="176" height="42" rx="7" fill="#F1F3F5" stroke="#B9C3CC" stroke-width="1.5"/>
+<text x="730" y="93" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1F2D3A">Очистка</text>
+<line x1="730" y1="108" x2="730" y2="782" stroke="#8FA3B5" stroke-width="1.1" stroke-dasharray="5 5"/>
+<rect x="852" y="66" width="176" height="42" rx="7" fill="#F1F3F5" stroke="#B9C3CC" stroke-width="1.5"/>
+<text x="940" y="93" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1F2D3A">Модель</text>
+<line x1="940" y1="108" x2="940" y2="782" stroke="#8FA3B5" stroke-width="1.1" stroke-dasharray="5 5"/>
+<rect x="1082" y="66" width="176" height="42" rx="7" fill="#F1F3F5" stroke="#B9C3CC" stroke-width="1.5"/>
+<text x="1170" y="93" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1F2D3A">Расчёт эффекта</text>
+<line x1="1170" y1="108" x2="1170" y2="782" stroke="#8FA3B5" stroke-width="1.1" stroke-dasharray="5 5"/>
+<line x1="119" y1="142" x2="291" y2="142" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="140" y="122" width="131" height="17" fill="#FFFFFF"/>
+<text x="205" y="133" text-anchor="middle" font-size="11" fill="#5A6B7B">выбирает файл продаж</text>
+<line x1="309" y1="180" x2="511" y2="180" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="333" y="160" width="155" height="17" fill="#FFFFFF"/>
+<text x="410" y="171" text-anchor="middle" font-size="11" fill="#5A6B7B">POST /upload (файл, uid)</text>
+<rect x="224" y="204" width="296" height="122" rx="8" fill="none" stroke="#9BC0A6" stroke-width="1.4" stroke-dasharray="6 4"/>
+<rect x="228" y="212" width="208" height="17" fill="#FFFFFF"/>
+<text x="234" y="223" font-size="11" font-weight="600" fill="#5A6B7B">loop [каждые 400 мс, параллельно]</text>
+<line x1="309" y1="262" x2="511" y2="262" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="345" y="242" width="131" height="17" fill="#FFFFFF"/>
+<text x="410" y="253" text-anchor="middle" font-size="11" fill="#5A6B7B">GET /upload-progress</text>
+<line x1="511" y1="302" x2="309" y2="302" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)" stroke-dasharray="5 4"/>
+<rect x="333" y="282" width="155" height="17" fill="#FFFFFF"/>
+<text x="410" y="293" text-anchor="middle" font-size="11" fill="#5A6B7B">этап обработки и процент</text>
+<line x1="529" y1="226" x2="721" y2="226" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="554" y="206" width="143" height="17" fill="#FFFFFF"/>
+<text x="625" y="217" text-anchor="middle" font-size="11" fill="#5A6B7B">read_table() + clean()</text>
+<line x1="721" y1="266" x2="529" y2="266" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)" stroke-dasharray="5 4"/>
+<rect x="542" y="246" width="166" height="17" fill="#FFFFFF"/>
+<text x="625" y="257" text-anchor="middle" font-size="11" fill="#5A6B7B">канонический набор + отчёт</text>
+<line x1="529" y1="306" x2="931" y2="306" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="611" y="286" width="238" height="17" fill="#FFFFFF"/>
+<text x="730" y="297" text-anchor="middle" font-size="11" fill="#5A6B7B">adapt_to_data(): проверка и дообучение</text>
+<line x1="931" y1="346" x2="529" y2="346" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)" stroke-dasharray="5 4"/>
+<rect x="644" y="326" width="172" height="17" fill="#FFFFFF"/>
+<text x="730" y="337" text-anchor="middle" font-size="11" fill="#5A6B7B">модель под этот ассортимент</text>
+<line x1="511" y1="390" x2="309" y2="390" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)" stroke-dasharray="5 4"/>
+<rect x="321" y="370" width="178" height="17" fill="#FFFFFF"/>
+<text x="410" y="381" text-anchor="middle" font-size="11" fill="#5A6B7B">session_id, отчёт об очистке</text>
+<line x1="119" y1="442" x2="291" y2="442" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="137" y="422" width="137" height="17" fill="#FFFFFF"/>
+<text x="205" y="433" text-anchor="middle" font-size="11" fill="#5A6B7B">нажимает «Рассчитать»</text>
+<line x1="309" y1="482" x2="511" y2="482" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="276" y="462" width="267" height="17" fill="#FFFFFF"/>
+<text x="410" y="473" text-anchor="middle" font-size="11" fill="#5A6B7B">GET /economic-impact (охват, срок поставки)</text>
+<line x1="529" y1="522" x2="1161" y2="522" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="791" y="502" width="107" height="17" fill="#FFFFFF"/>
+<text x="845" y="513" text-anchor="middle" font-size="11" fill="#5A6B7B">tune_portfolio()</text>
+<rect x="790" y="548" width="410" height="128" rx="8" fill="none" stroke="#B7A3CC" stroke-width="1.4" stroke-dasharray="6 4"/>
+<rect x="794" y="556" width="285" height="17" fill="#FFFFFF"/>
+<text x="800" y="567" font-size="11" font-weight="600" fill="#5A6B7B">loop [по каждому товару × сетка коэффициентов]</text>
+<line x1="1161" y1="606" x2="949" y2="606" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="978" y="586" width="155" height="17" fill="#FFFFFF"/>
+<text x="1055" y="597" text-anchor="middle" font-size="11" fill="#5A6B7B">прогноз на окне бэктеста</text>
+<line x1="949" y1="646" x2="1161" y2="646" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)" stroke-dasharray="5 4"/>
+<rect x="996" y="626" width="119" height="17" fill="#FFFFFF"/>
+<text x="1055" y="637" text-anchor="middle" font-size="11" fill="#5A6B7B">квантили 0.5 и 0.9</text>
+<line x1="1161" y1="706" x2="529" y2="706" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)" stroke-dasharray="5 4"/>
+<rect x="729" y="686" width="232" height="17" fill="#FFFFFF"/>
+<text x="845" y="697" text-anchor="middle" font-size="11" fill="#5A6B7B">эффект, охват управления, диагностика</text>
+<line x1="511" y1="744" x2="309" y2="744" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)" stroke-dasharray="5 4"/>
+<rect x="392" y="724" width="36" height="17" fill="#FFFFFF"/>
+<text x="410" y="735" text-anchor="middle" font-size="11" fill="#5A6B7B">JSON</text>
+<line x1="291" y1="782" x2="119" y2="782" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)" stroke-dasharray="5 4"/>
+<rect x="116" y="762" width="178" height="17" fill="#FFFFFF"/>
+<text x="205" y="773" text-anchor="middle" font-size="11" fill="#5A6B7B">карточки эффекта и пояснение</text>
+</svg>

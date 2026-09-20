@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="778" viewBox="0 32 1240 778" font-family="'Segoe UI', 'PT Sans', Arial, sans-serif">
+<rect y="32" width="1240" height="810" fill="#FFFFFF"/>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8FA3B5"/></marker>
+<marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10" fill="none" stroke="#8FA3B5" stroke-width="1.4"/></marker>
+</defs>
+<text x="620" y="56" text-anchor="middle" font-size="11.5" fill="#5A6B7B" font-style="italic">Трёхуровневая клиент-серверная архитектура; обмен по HTTP, формат JSON</text>
+<rect x="40" y="78" width="1160" height="118" rx="10" fill="none" stroke="#8FA3B5" stroke-width="1.1" stroke-dasharray="7 5"/>
+<text x="52" y="96" font-size="11.5" font-weight="600" fill="#5A6B7B" letter-spacing="0.6">УРОВЕНЬ ПРЕДСТАВЛЕНИЯ</text>
+<rect x="80" y="104" width="330" height="74" rx="9" fill="#EAF2FA" stroke="#9CC0DE" stroke-width="1.6"/>
+<text x="245" y="128" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Веб-интерфейс (web/index.html)</text>
+<text x="245" y="147" text-anchor="middle" font-size="11.5" fill="#5A6B7B">одностраничное приложение, без сборки</text>
+<rect x="450" y="104" width="300" height="74" rx="9" fill="#EAF2FA" stroke="#9CC0DE" stroke-width="1.6"/>
+<text x="600" y="128" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Загрузка файла</text>
+<text x="600" y="147" text-anchor="middle" font-size="11.5" fill="#5A6B7B">drag-and-drop, индикатор этапов</text>
+<rect x="790" y="104" width="370" height="74" rx="9" fill="#EAF2FA" stroke="#9CC0DE" stroke-width="1.6"/>
+<text x="975" y="128" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Панели результата</text>
+<text x="975" y="147" text-anchor="middle" font-size="11.5" fill="#5A6B7B">план закупки, очистка, эффект</text>
+<rect x="40" y="214" width="1160" height="150" rx="10" fill="none" stroke="#8FA3B5" stroke-width="1.1" stroke-dasharray="7 5"/>
+<text x="52" y="232" font-size="11.5" font-weight="600" fill="#5A6B7B" letter-spacing="0.6">УРОВЕНЬ ПРИЛОЖЕНИЯ</text>
+<rect x="80" y="240" width="250" height="104" rx="9" fill="#E7F0E9" stroke="#9BC0A6" stroke-width="1.6"/>
+<text x="205" y="264" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">HTTP-сервер</text>
+<text x="205" y="283" text-anchor="middle" font-size="11.5" fill="#5A6B7B">scripts/serve.py</text>
+<text x="205" y="299" text-anchor="middle" font-size="11.5" fill="#5A6B7B">стандартная библиотека</text>
+<rect x="360" y="240" width="400" height="104" rx="9" fill="#E7F0E9" stroke="#9BC0A6" stroke-width="1.6"/>
+<text x="560" y="264" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">REST API</text>
+<text x="560" y="283" text-anchor="middle" font-size="11.5" fill="#5A6B7B">/upload  /history  /forecast</text>
+<text x="560" y="299" text-anchor="middle" font-size="11.5" fill="#5A6B7B">/order-plan  /economic-impact</text>
+<text x="560" y="315" text-anchor="middle" font-size="11.5" fill="#5A6B7B">/clean-report  /upload-progress</text>
+<rect x="790" y="240" width="370" height="104" rx="9" fill="#E7F0E9" stroke="#9BC0A6" stroke-width="1.6"/>
+<text x="975" y="264" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Сессии пользователей</text>
+<text x="975" y="283" text-anchor="middle" font-size="11.5" fill="#5A6B7B">очищенные данные в памяти</text>
+<text x="975" y="299" text-anchor="middle" font-size="11.5" fill="#5A6B7B">модель сессии, TTL 4 часа</text>
+<rect x="40" y="382" width="1160" height="236" rx="10" fill="none" stroke="#8FA3B5" stroke-width="1.1" stroke-dasharray="7 5"/>
+<text x="52" y="400" font-size="11.5" font-weight="600" fill="#5A6B7B" letter-spacing="0.6">УРОВЕНЬ БИЗНЕС-ЛОГИКИ (ПАКЕТ SRC/)</text>
+<rect x="80" y="408" width="245" height="88" rx="9" fill="#F2EDF7" stroke="#B7A3CC" stroke-width="1.6"/>
+<text x="202" y="432" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">ingest.py</text>
+<text x="202" y="451" text-anchor="middle" font-size="11.5" fill="#5A6B7B">распознавание</text>
+<text x="202" y="467" text-anchor="middle" font-size="11.5" fill="#5A6B7B">колонок</text>
+<rect x="353" y="408" width="245" height="88" rx="9" fill="#F2EDF7" stroke="#B7A3CC" stroke-width="1.6"/>
+<text x="475" y="432" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">cleaning.py</text>
+<text x="475" y="451" text-anchor="middle" font-size="11.5" fill="#5A6B7B">очистка</text>
+<text x="475" y="467" text-anchor="middle" font-size="11.5" fill="#5A6B7B">и дозаполнение</text>
+<rect x="626" y="408" width="245" height="88" rx="9" fill="#F2EDF7" stroke="#B7A3CC" stroke-width="1.6"/>
+<text x="748" y="432" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">demand_classes.py</text>
+<text x="748" y="451" text-anchor="middle" font-size="11.5" fill="#5A6B7B">классификация</text>
+<text x="748" y="467" text-anchor="middle" font-size="11.5" fill="#5A6B7B">спроса</text>
+<rect x="899" y="408" width="245" height="88" rx="9" fill="#F2EDF7" stroke="#B7A3CC" stroke-width="1.6"/>
+<text x="1021" y="432" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">features.py</text>
+<text x="1021" y="451" text-anchor="middle" font-size="11.5" fill="#5A6B7B">признаки</text>
+<text x="1021" y="467" text-anchor="middle" font-size="11.5" fill="#5A6B7B">для модели</text>
+<rect x="80" y="512" width="245" height="88" rx="9" fill="#F2EDF7" stroke="#B7A3CC" stroke-width="1.6"/>
+<text x="202" y="536" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">model.py</text>
+<text x="202" y="555" text-anchor="middle" font-size="11.5" fill="#5A6B7B">градиентный бустинг</text>
+<text x="202" y="571" text-anchor="middle" font-size="11.5" fill="#5A6B7B">квантили 0.5 и 0.9</text>
+<rect x="353" y="512" width="245" height="88" rx="9" fill="#F2EDF7" stroke="#B7A3CC" stroke-width="1.6"/>
+<text x="475" y="536" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">model_fit.py</text>
+<text x="475" y="555" text-anchor="middle" font-size="11.5" fill="#5A6B7B">проверка и</text>
+<text x="475" y="571" text-anchor="middle" font-size="11.5" fill="#5A6B7B">дообучение</text>
+<rect x="626" y="512" width="245" height="88" rx="9" fill="#F2EDF7" stroke="#B7A3CC" stroke-width="1.6"/>
+<text x="748" y="536" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">inventory.py</text>
+<text x="748" y="555" text-anchor="middle" font-size="11.5" fill="#5A6B7B">точка заказа,</text>
+<text x="748" y="571" text-anchor="middle" font-size="11.5" fill="#5A6B7B">страховой запас</text>
+<rect x="899" y="512" width="245" height="88" rx="9" fill="#F2EDF7" stroke="#B7A3CC" stroke-width="1.6"/>
+<text x="1021" y="536" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">backtest.py</text>
+<text x="1021" y="555" text-anchor="middle" font-size="11.5" fill="#5A6B7B">бэктест и</text>
+<text x="1021" y="571" text-anchor="middle" font-size="11.5" fill="#5A6B7B">экономический эффект</text>
+<rect x="40" y="636" width="1160" height="136" rx="10" fill="none" stroke="#8FA3B5" stroke-width="1.1" stroke-dasharray="7 5"/>
+<text x="52" y="654" font-size="11.5" font-weight="600" fill="#5A6B7B" letter-spacing="0.6">УРОВЕНЬ ДАННЫХ</text>
+<rect x="80" y="662" width="300" height="86" rx="9" fill="#FBF3E6" stroke="#D9BC86" stroke-width="1.6"/>
+<text x="230" y="686" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Файл пользователя</text>
+<text x="230" y="705" text-anchor="middle" font-size="11.5" fill="#5A6B7B">CSV / XLSX / выгрузка 1С</text>
+<rect x="420" y="662" width="300" height="86" rx="9" fill="#FBF3E6" stroke="#D9BC86" stroke-width="1.6"/>
+<text x="570" y="686" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Обученная модель</text>
+<text x="570" y="705" text-anchor="middle" font-size="11.5" fill="#5A6B7B">models/global/</text>
+<rect x="760" y="662" width="400" height="86" rx="9" fill="#FBF3E6" stroke="#D9BC86" stroke-width="1.6"/>
+<text x="960" y="686" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Результаты расчёта</text>
+<text x="960" y="705" text-anchor="middle" font-size="11.5" fill="#5A6B7B">план закупки, отчёты — в ответе API</text>
+<line x1="620" y1="178" x2="620" y2="240" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="549" y="191" width="143" height="17" fill="#FFFFFF"/>
+<text x="620" y="202" text-anchor="middle" font-size="11" fill="#5A6B7B">HTTP, multipart и JSON</text>
+<line x1="620" y1="344" x2="620" y2="408" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="572" y="358" width="95" height="17" fill="#FFFFFF"/>
+<text x="620" y="369" text-anchor="middle" font-size="11" fill="#5A6B7B">вызовы функций</text>
+<line x1="620" y1="600" x2="620" y2="662" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="569" y="613" width="101" height="17" fill="#FFFFFF"/>
+<text x="620" y="624" text-anchor="middle" font-size="11" fill="#5A6B7B">чтение и запись</text>
+</svg>

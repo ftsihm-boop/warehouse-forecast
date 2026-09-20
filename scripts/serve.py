@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import threading
 import traceback
@@ -547,9 +548,14 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    # На локальной машине сервер слушает только себя — так безопаснее.
+    # В контейнере всё наоборот: адрес и порт задаёт платформа через
+    # переменные окружения, и слушать нужно все интерфейсы, иначе
+    # снаружи до приложения не достучаться.
     ap = argparse.ArgumentParser()
-    ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"))
+    ap.add_argument("--port", type=int,
+                    default=int(os.environ.get("PORT", "8000")))
     a = ap.parse_args()
 
     print("=" * 58)

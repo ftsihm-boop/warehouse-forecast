@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="728" viewBox="0 32 1240 728" font-family="'Segoe UI', 'PT Sans', Arial, sans-serif">
+<rect y="32" width="1240" height="760" fill="#FFFFFF"/>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8FA3B5"/></marker>
+<marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10" fill="none" stroke="#8FA3B5" stroke-width="1.4"/></marker>
+</defs>
+<text x="620" y="56" text-anchor="middle" font-size="11.5" fill="#5A6B7B" font-style="italic">От файла пользователя до плана закупки и экономического обоснования</text>
+<rect x="60" y="92" width="210" height="80" rx="9" fill="#FBF3E6" stroke="#D9BC86" stroke-width="1.6"/>
+<text x="165" y="116" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Файл продаж</text>
+<text x="165" y="135" text-anchor="middle" font-size="11.5" fill="#5A6B7B">CSV, XLSX, 1С</text>
+<rect x="320" y="92" width="230" height="80" rx="9" fill="#F2EDF7" stroke="#B7A3CC" stroke-width="1.6"/>
+<text x="435" y="116" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Распознавание</text>
+<text x="435" y="135" text-anchor="middle" font-size="11.5" fill="#5A6B7B">шапка, колонки,</text>
+<text x="435" y="151" text-anchor="middle" font-size="11.5" fill="#5A6B7B">форматы дат</text>
+<rect x="600" y="92" width="230" height="80" rx="9" fill="#F2EDF7" stroke="#B7A3CC" stroke-width="1.6"/>
+<text x="715" y="116" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Очистка</text>
+<text x="715" y="135" text-anchor="middle" font-size="11.5" fill="#5A6B7B">дубли, выбросы,</text>
+<text x="715" y="151" text-anchor="middle" font-size="11.5" fill="#5A6B7B">пропуски дат</text>
+<rect x="880" y="92" width="300" height="80" rx="9" fill="#F2EDF7" stroke="#B7A3CC" stroke-width="1.6"/>
+<text x="1030" y="116" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Разметка дефицита</text>
+<text x="1030" y="135" text-anchor="middle" font-size="11.5" fill="#5A6B7B">продажи 0 при остатке 0 —</text>
+<text x="1030" y="151" text-anchor="middle" font-size="11.5" fill="#5A6B7B">спрос был выше факта</text>
+<line x1="270" y1="132" x2="320" y2="132" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<line x1="550" y1="132" x2="600" y2="132" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<line x1="830" y1="132" x2="880" y2="132" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="880" y="222" width="300" height="84" rx="9" fill="#F2EDF7" stroke="#B7A3CC" stroke-width="1.6"/>
+<text x="1030" y="246" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Классификация спроса</text>
+<text x="1030" y="265" text-anchor="middle" font-size="11.5" fill="#5A6B7B">ADI и CV²: SMOOTH, ERRATIC,</text>
+<text x="1030" y="281" text-anchor="middle" font-size="11.5" fill="#5A6B7B">INTERMITTENT, LUMPY + ABC</text>
+<line x1="1030" y1="172" x2="1030" y2="222" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="600" y="222" width="230" height="84" rx="9" fill="#F2EDF7" stroke="#B7A3CC" stroke-width="1.6"/>
+<text x="715" y="246" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Признаки</text>
+<text x="715" y="265" text-anchor="middle" font-size="11.5" fill="#5A6B7B">лаги, скользящие,</text>
+<text x="715" y="281" text-anchor="middle" font-size="11.5" fill="#5A6B7B">календарь РФ</text>
+<line x1="880" y1="264" x2="830" y2="264" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="600" y="356" width="230" height="96" rx="9" fill="#F2EDF7" stroke="#B7A3CC" stroke-width="1.6"/>
+<text x="715" y="380" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Модель</text>
+<text x="715" y="399" text-anchor="middle" font-size="11.5" fill="#5A6B7B">градиентный бустинг</text>
+<text x="715" y="415" text-anchor="middle" font-size="11.5" fill="#5A6B7B">квантили 0.5 и 0.9</text>
+<line x1="715" y1="306" x2="715" y2="356" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="250" y="356" width="270" height="96" rx="9" fill="#F2EDF7" stroke="#B7A3CC" stroke-width="1.6"/>
+<text x="385" y="380" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Дообучение</text>
+<text x="385" y="399" text-anchor="middle" font-size="11.5" fill="#5A6B7B">проверка на данных</text>
+<text x="385" y="415" text-anchor="middle" font-size="11.5" fill="#5A6B7B">пользователя, затем</text>
+<text x="385" y="431" text-anchor="middle" font-size="11.5" fill="#5A6B7B">обучение</text>
+<line x1="600" y1="386" x2="520" y2="386" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="501" y="367" width="119" height="17" fill="#FFFFFF"/>
+<text x="560" y="378" text-anchor="middle" font-size="11" fill="#5A6B7B">проверка на данных</text>
+<line x1="520" y1="424" x2="600" y2="424" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)" stroke-dasharray="5 4"/>
+<rect x="501" y="405" width="119" height="17" fill="#FFFFFF"/>
+<text x="560" y="416" text-anchor="middle" font-size="11" fill="#5A6B7B">обновлённая модель</text>
+<rect x="880" y="356" width="300" height="96" rx="9" fill="#F2EDF7" stroke="#B7A3CC" stroke-width="1.6"/>
+<text x="1030" y="380" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Прогноз спроса</text>
+<text x="1030" y="399" text-anchor="middle" font-size="11.5" fill="#5A6B7B">на горизонт планирования</text>
+<text x="1030" y="415" text-anchor="middle" font-size="11.5" fill="#5A6B7B">медиана и верхняя граница</text>
+<line x1="830" y1="404" x2="880" y2="404" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="880" y="502" width="300" height="96" rx="9" fill="#E7F0E9" stroke="#9BC0A6" stroke-width="1.6"/>
+<text x="1030" y="526" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">План закупки</text>
+<text x="1030" y="545" text-anchor="middle" font-size="11.5" fill="#5A6B7B">точка заказа, страховой</text>
+<text x="1030" y="561" text-anchor="middle" font-size="11.5" fill="#5A6B7B">запас, объём заказа</text>
+<line x1="1030" y1="452" x2="1030" y2="502" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="510" y="502" width="320" height="96" rx="9" fill="#E7F0E9" stroke="#9BC0A6" stroke-width="1.6"/>
+<text x="670" y="526" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Экономический эффект</text>
+<text x="670" y="545" text-anchor="middle" font-size="11.5" fill="#5A6B7B">бэктест: ручное планирование</text>
+<text x="670" y="561" text-anchor="middle" font-size="11.5" fill="#5A6B7B">против системы</text>
+<line x1="880" y1="550" x2="830" y2="550" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="160" y="502" width="300" height="96" rx="9" fill="#F2EDF7" stroke="#B7A3CC" stroke-width="1.6"/>
+<text x="310" y="526" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Подбор запаса</text>
+<text x="310" y="545" text-anchor="middle" font-size="11.5" fill="#5A6B7B">по каждому товару свой</text>
+<text x="310" y="561" text-anchor="middle" font-size="11.5" fill="#5A6B7B">коэффициент; убыточные —</text>
+<text x="310" y="577" text-anchor="middle" font-size="11.5" fill="#5A6B7B">на ручном правиле</text>
+<line x1="510" y1="550" x2="460" y2="550" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="510" y="640" width="320" height="74" rx="9" fill="#EAF2FA" stroke="#9CC0DE" stroke-width="1.6"/>
+<text x="670" y="664" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2D3A">Отчёт пользователю</text>
+<text x="670" y="683" text-anchor="middle" font-size="11.5" fill="#5A6B7B">таблица, графики, выгрузка</text>
+<line x1="670" y1="598" x2="670" y2="640" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+</svg>

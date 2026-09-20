@@ -1,0 +1,151 @@
+{
+  "backend": "catboost",
+  "horizons": [
+    7,
+    14,
+    30,
+    60,
+    90
+  ],
+  "n_train": 224716,
+  "n_test": 4227,
+  "overall": {
+    "WAPE, %": 18.69,
+    "MAPE, %": 31.83,
+    "MAE": 12.06,
+    "Смещение, %": 1.42
+  },
+  "by_horizon": [
+    {
+      "Горизонт, дней": 7,
+      "Наблюдений": 1617,
+      "WAPE, %": 21.76,
+      "MAPE, %": 40.26,
+      "MAE": 5.76,
+      "Смещение, %": 1.56
+    },
+    {
+      "Горизонт, дней": 14,
+      "Наблюдений": 1428,
+      "WAPE, %": 18.66,
+      "MAPE, %": 28.0,
+      "MAE": 9.85,
+      "Смещение, %": 1.49
+    },
+    {
+      "Горизонт, дней": 30,
+      "Наблюдений": 996,
+      "WAPE, %": 17.98,
+      "MAPE, %": 25.17,
+      "MAE": 20.24,
+      "Смещение, %": 2.41
+    },
+    {
+      "Горизонт, дней": 60,
+      "Наблюдений": 186,
+      "WAPE, %": 17.53,
+      "MAPE, %": 23.64,
+      "MAE": 39.93,
+      "Смещение, %": -1.5
+    }
+  ],
+  "q90_coverage": 0.912,
+  "top_features": [
+    {
+      "feature": "mean_56",
+      "importance": 15.720951620015741
+    },
+    {
+      "feature": "zero_share_28",
+      "importance": 14.13236168929444
+    },
+    {
+      "feature": "mean_28",
+      "importance": 13.235773342873362
+    },
+    {
+      "feature": "median_56",
+      "importance": 12.431844214347674
+    },
+    {
+      "feature": "month",
+      "importance": 9.084169288822794
+    },
+    {
+      "feature": "week_of_year",
+      "importance": 8.370867727974911
+    },
+    {
+      "feature": "days_of_history",
+      "importance": 5.001222178774821
+    },
+    {
+      "feature": "mean_7",
+      "importance": 3.6596810987054433
+    },
+    {
+      "feature": "std_28",
+      "importance": 3.508356564499065
+    },
+    {
+      "feature": "trend_7_28",
+      "importance": 3.1619763733616546
+    },
+    {
+      "feature": "max_28",
+      "importance": 2.4158368471988476
+    },
+    {
+      "feature": "max_56",
+      "importance": 2.2169806014165
+    },
+    {
+      "feature": "horizon",
+      "importance": 1.7169837702358792
+    },
+    {
+      "feature": "max_7",
+      "importance": 1.3150266297119595
+    },
+    {
+      "feature": "cv_28",
+      "importance": 1.129528365109292
+    },
+    {
+      "feature": "median_7",
+      "importance": 1.0295496146469245
+    },
+    {
+      "feature": "std_7",
+      "importance": 0.9031606071053704
+    },
+    {
+      "feature": "mean_14",
+      "importance": 0.5135539508114646
+    },
+    {
+      "feature": "std_56",
+      "importance": 0.45217551509385384
+    },
+    {
+      "feature": "lag_7",
+      "importance": 0.0
+    }
+  ],
+  "sources": [
+    {
+      "file": "online_retail_canonical.parquet",
+      "rows": 22195,
+      "skus": 34,
+      "from": "2009-12-01",
+      "to": "2011-12-09"
+    },
+    {
+      "file": "1c_canonical.parquet",
+      "rows": 27414,
+      "skus": 34,
+      "from": "2013-04-24",
+      "to": "2015-10-31"
+    }
+  ]
+}

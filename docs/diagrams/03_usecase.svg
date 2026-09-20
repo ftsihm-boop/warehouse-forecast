@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="748" viewBox="0 32 1180 748" font-family="'Segoe UI', 'PT Sans', Arial, sans-serif">
+<rect y="32" width="1180" height="780" fill="#FFFFFF"/>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8FA3B5"/></marker>
+<marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10" fill="none" stroke="#8FA3B5" stroke-width="1.4"/></marker>
+</defs>
+<rect x="300" y="86" width="600" height="600" rx="12" fill="none" stroke="#8FA3B5" stroke-width="1.6"/>
+<text x="600" y="112" text-anchor="middle" font-size="13" font-weight="600" fill="#5A6B7B">Информационная система управления складскими запасами</text>
+<circle cx="140" cy="175" r="17" fill="#FFFFFF" stroke="#1F2D3A" stroke-width="1.8"/>
+<line x1="140" y1="192" x2="140" y2="235" stroke="#1F2D3A" stroke-width="1.8"/>
+<line x1="116" y1="207" x2="164" y2="207" stroke="#1F2D3A" stroke-width="1.8"/>
+<line x1="140" y1="235" x2="120" y2="267" stroke="#1F2D3A" stroke-width="1.8"/>
+<line x1="140" y1="235" x2="160" y2="267" stroke="#1F2D3A" stroke-width="1.8"/>
+<text x="140" y="291" text-anchor="middle" font-size="13.5" font-weight="600" fill="#1F2D3A">Менеджер</text>
+<text x="140" y="308" text-anchor="middle" font-size="11" fill="#5A6B7B">по закупкам</text>
+<circle cx="140" cy="500" r="17" fill="#FFFFFF" stroke="#1F2D3A" stroke-width="1.8"/>
+<line x1="140" y1="517" x2="140" y2="560" stroke="#1F2D3A" stroke-width="1.8"/>
+<line x1="116" y1="532" x2="164" y2="532" stroke="#1F2D3A" stroke-width="1.8"/>
+<line x1="140" y1="560" x2="120" y2="592" stroke="#1F2D3A" stroke-width="1.8"/>
+<line x1="140" y1="560" x2="160" y2="592" stroke="#1F2D3A" stroke-width="1.8"/>
+<text x="140" y="616" text-anchor="middle" font-size="13.5" font-weight="600" fill="#1F2D3A">Аналитик</text>
+<text x="140" y="633" text-anchor="middle" font-size="11" fill="#5A6B7B">сопровождение модели</text>
+<ellipse cx="600" cy="168" rx="150" ry="31" fill="#EAF2FA" stroke="#9CC0DE" stroke-width="1.6"/>
+<text x="600" y="166" text-anchor="middle" font-size="12.5" fill="#1F2D3A">Загрузить данные о продажах</text>
+<text x="600" y="183" text-anchor="middle" font-size="10.5" fill="#5A6B7B">CSV, XLSX, выгрузка 1С</text>
+<ellipse cx="600" cy="250" rx="150" ry="31" fill="#EAF2FA" stroke="#9CC0DE" stroke-width="1.6"/>
+<text x="600" y="255" text-anchor="middle" font-size="12.5" fill="#1F2D3A">Просмотреть отчёт об очистке</text>
+<ellipse cx="600" cy="332" rx="150" ry="31" fill="#EAF2FA" stroke="#9CC0DE" stroke-width="1.6"/>
+<text x="600" y="330" text-anchor="middle" font-size="12.5" fill="#1F2D3A">Получить план закупки</text>
+<text x="600" y="347" text-anchor="middle" font-size="10.5" fill="#5A6B7B">точка заказа и объём</text>
+<ellipse cx="600" cy="414" rx="160" ry="31" fill="#EAF2FA" stroke="#9CC0DE" stroke-width="1.6"/>
+<text x="600" y="419" text-anchor="middle" font-size="12.5" fill="#1F2D3A">Рассчитать экономический эффект</text>
+<ellipse cx="600" cy="496" rx="160" ry="31" fill="#EAF2FA" stroke="#9CC0DE" stroke-width="1.6"/>
+<text x="600" y="501" text-anchor="middle" font-size="12.5" fill="#1F2D3A">Задать срок поставки и горизонт</text>
+<ellipse cx="600" cy="570" rx="120" ry="31" fill="#EAF2FA" stroke="#9CC0DE" stroke-width="1.6"/>
+<text x="600" y="575" text-anchor="middle" font-size="12.5" fill="#1F2D3A">Выгрузить отчёт</text>
+<ellipse cx="600" cy="645" rx="150" ry="31" fill="#EAF2FA" stroke="#9CC0DE" stroke-width="1.6"/>
+<text x="600" y="650" text-anchor="middle" font-size="12.5" fill="#1F2D3A">Обучить модель на истории</text>
+<line x1="176" y1="211" x2="452" y2="168" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<line x1="176" y1="211" x2="452" y2="250" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<line x1="176" y1="211" x2="452" y2="332" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<line x1="176" y1="211" x2="452" y2="414" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<line x1="176" y1="211" x2="452" y2="496" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<line x1="176" y1="211" x2="452" y2="570" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<line x1="176" y1="536" x2="452" y2="645" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#a)"/>
+<ellipse cx="950" cy="190" rx="118" ry="28" fill="#EAF2FA" stroke="#9CC0DE" stroke-width="1.6"/>
+<text x="950" y="195" text-anchor="middle" font-size="12.5" fill="#1F2D3A">Дообучить под ассортимент</text>
+<ellipse cx="950" cy="300" rx="118" ry="28" fill="#EAF2FA" stroke="#9CC0DE" stroke-width="1.6"/>
+<text x="950" y="305" text-anchor="middle" font-size="12.5" fill="#1F2D3A">Классифицировать спрос</text>
+<ellipse cx="950" cy="440" rx="118" ry="28" fill="#EAF2FA" stroke="#9CC0DE" stroke-width="1.6"/>
+<text x="950" y="445" text-anchor="middle" font-size="12.5" fill="#1F2D3A">Подобрать страховой запас</text>
+<line x1="748" y1="158" x2="838" y2="184" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#ao)" stroke-dasharray="5 4"/>
+<rect x="760" y="145" width="65" height="17" fill="#FFFFFF"/>
+<text x="793" y="156" text-anchor="middle" font-size="11" fill="#5A6B7B">«include»</text>
+<line x1="742" y1="186" x2="838" y2="292" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#ao)" stroke-dasharray="5 4"/>
+<rect x="773" y="239" width="65" height="17" fill="#FFFFFF"/>
+<text x="806" y="250" text-anchor="middle" font-size="11" fill="#5A6B7B">«include»</text>
+<line x1="758" y1="420" x2="838" y2="434" stroke="#8FA3B5" stroke-width="1.6" marker-end="url(#ao)" stroke-dasharray="5 4"/>
+<rect x="765" y="403" width="65" height="17" fill="#FFFFFF"/>
+<text x="798" y="414" text-anchor="middle" font-size="11" fill="#5A6B7B">«include»</text>
+<text x="40" y="740" text-anchor="start" font-size="11.5" fill="#5A6B7B" font-style="italic">Пунктирные связи «include» — обязательные части сценария, выполняемые системой автоматически.</text>
+</svg>
