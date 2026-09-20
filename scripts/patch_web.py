@@ -636,6 +636,67 @@ HTML_CODE = '''    <!-- === API-INTEGRATION === -->
 
     <div class="stats-row">'''
 
+# --- 7c. Кнопка выгрузки заявки на закупку -----------------------------------
+# Кнопка стоит в панели параметров рядом с горизонтом и сроком поставки:
+# заявка считается именно по ним, и менять параметр, а потом скачивать
+# файл удобно в одном месте.
+ORDER_BTN_ANCHOR = '''      <div class="spacer"></div>
+      <button id="reset-btn" class="toolbar-reset" data-i18n="resetBtn">Загрузить другой файл</button>'''
+ORDER_BTN_HTML = '''      <div class="spacer"></div>
+      <button id="order-xlsx-btn" class="order-xlsx-btn" title="Excel: заявка на закупку, полный план и параметры расчёта">Скачать заявку на закупку</button>
+      <button id="reset-btn" class="toolbar-reset" data-i18n="resetBtn">Загрузить другой файл</button>'''
+
+ORDER_BTN_CSS = '''  .order-xlsx-btn {
+    font-size: 13.5px; padding: 7px 14px; border-radius: 7px;
+    border: 1px solid #1F5F5B; background: #1F5F5B; color: #fff;
+    cursor: pointer; margin-right: 10px; font-family: inherit;
+  }
+  .order-xlsx-btn:hover { background: #17504C; }
+  .order-xlsx-btn:disabled { opacity: .55; cursor: default; }
+
+'''
+
+ORDER_BTN_JS = '''  // --- выгрузка заявки на закупку -------------------------------------------
+  // Файл собирает сервер: там же, где считается план, — иначе цифры на
+  // экране и в скачанном документе со временем разойдутся. Браузеру
+  // остаётся забрать готовый файл и сохранить его под именем, которое
+  // прислал сервер.
+  function downloadOrderXlsx() {
+    var btn = document.getElementById("order-xlsx-btn");
+    if (!sessionId) {
+      alert("Сначала загрузите файл продаж.");
+      return;
+    }
+    var old = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.textContent = "Собираю заявку…"; }
+
+    var url = apiUrl("/order-plan/xlsx", {
+      session_id: sessionId, horizon: horizonDays, lead_time_days: leadTimeDays
+    });
+    fetch(url).then(function (res) {
+      if (!res.ok) throw new Error("Сервер вернул " + res.status);
+      var name = "Заявка_на_закупку.xlsx";
+      var cd = res.headers.get("Content-Disposition") || "";
+      var m = cd.match(/filename\*=UTF-8''([^;]+)/);
+      if (m) { try { name = decodeURIComponent(m[1]); } catch (e) { /* оставим запасное */ } }
+      return res.blob().then(function (blob) { return { blob: blob, name: name }; });
+    }).then(function (out) {
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(out.blob);
+      a.download = out.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+    }).catch(function (err) {
+      alert("Не удалось собрать заявку: " + err.message);
+    }).finally(function () {
+      if (btn) { btn.disabled = false; btn.textContent = old; }
+    });
+  }
+
+'''
+
 # --- 7b. Индикатор обработки — в экране загрузки ---------------------------
 # Важно именно здесь, а не рядом с остальной панелью: блок с результатами
 # лежит внутри app-view, который до окончания загрузки скрыт. Индикатор,
@@ -810,6 +871,13 @@ def apply(text: str) -> tuple[str, list[str]]:
     text = once(text, HTML_ANCHOR, HTML_CODE, "разметка панели")
     text = once(text, PROGRESS_ANCHOR, PROGRESS_HTML + PROGRESS_ANCHOR,
                 "индикатор в экране загрузки")
+    text = once(text, ORDER_BTN_ANCHOR, ORDER_BTN_HTML, "кнопка заявки")
+    text = once(text, CSS_ANCHOR, ORDER_BTN_CSS + CSS_ANCHOR, "стиль кнопки заявки")
+    text = once(text, CLIENT_ANCHOR, ORDER_BTN_JS + CLIENT_ANCHOR, "выгрузка заявки")
+    text = once(text, '  resetBtn.addEventListener',
+                '  var _oxBtn = document.getElementById("order-xlsx-btn");\n'
+                '  if (_oxBtn) _oxBtn.addEventListener("click", downloadOrderXlsx);\n'
+                '  resetBtn.addEventListener', "обработчик кнопки заявки")
     text = once(text, CSS_ANCHOR, CSS_CODE, "стили")
     return text, applied
 
@@ -904,6 +972,13 @@ UPGRADES: list[tuple[str, str, str]] = [
      "скрытие индикатора"),
 
     (PROGRESS_ANCHOR, PROGRESS_HTML + PROGRESS_ANCHOR, "разметка индикатора"),
+    (ORDER_BTN_ANCHOR, ORDER_BTN_HTML, "кнопка заявки"),
+    (CSS_ANCHOR, ORDER_BTN_CSS + CSS_ANCHOR, "стиль кнопки заявки"),
+    (CLIENT_ANCHOR, ORDER_BTN_JS + CLIENT_ANCHOR, "выгрузка заявки"),
+    ("  resetBtn.addEventListener",
+     '  var _oxBtn = document.getElementById("order-xlsx-btn");\n'
+     '  if (_oxBtn) _oxBtn.addEventListener("click", downloadOrderXlsx);\n'
+     '  resetBtn.addEventListener', "обработчик кнопки заявки"),
 
     ("""  .server-status {
     font-size: 13px;""",

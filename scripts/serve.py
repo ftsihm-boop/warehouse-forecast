@@ -53,6 +53,7 @@ from src.ingest import IngestError, read_table  # noqa: E402
 from src.inventory import build_order_plan  # noqa: E402
 from src.model import QuantileModel  # noqa: E402
 from src.model_fit import adapt_to_data  # noqa: E402
+from src.order_report import build_purchase_order, order_filename  # noqa: E402
 from src.schema import DATE, QTY, SKU, STOCK  # noqa: E402
 
 WEB_DIR = ROOT / "web"
@@ -210,8 +211,13 @@ def h_forecast_curve(q) -> dict:
     return {"sku": sku, "horizon": horizon, "points": _jsonable(curve)}
 
 
-def h_order_plan(q) -> dict:
-    s = _session(q.get("session_id", [None])[0])
+def _order_plan(s: dict, q) -> tuple:
+    """
+    Считает план закупки. Вынесено отдельно, потому что этим занимаются
+    два эндпоинта: JSON для экрана и выгрузка заявки в Excel. Если бы
+    каждый считал сам, цифры на экране и в скачанном файле со временем
+    разошлись бы — и доверять было бы нечему.
+    """
     horizon = int(q.get("horizon", [30])[0])
     lead = int(q.get("lead_time_days", [7])[0])
     review = int(q.get("review_period_days", [7])[0])
@@ -219,10 +225,11 @@ def h_order_plan(q) -> dict:
     fc = forecast(s["df"], horizon=horizon, model=_model_for(s), model_dir=None)
 
     # страховой запас по каждому товару — из его собственной экономики
-    factors, eco_info = None, {}
+    factors, costs, eco_info = None, {}, {}
     eco = derive_sku_economics(s["df"], cover_days=lead + review)
     if not eco.empty:
         factors = dict(zip(eco["sku"], eco["service_factor"]))
+        costs = dict(zip(eco["sku"], eco["unit_cost"]))
         from_data = int((eco["source"] == "данные").sum())
         eco_info = {"prices_from_file": from_data,
                     "prices_estimated": int(len(eco) - from_data),
@@ -230,6 +237,12 @@ def h_order_plan(q) -> dict:
 
     plan = build_order_plan(fc, horizon_days=horizon, lead_time_days=lead,
                             review_period_days=review, service_factors=factors)
+    return plan, costs, eco_info, horizon, lead, review
+
+
+def h_order_plan(q) -> dict:
+    s = _session(q.get("session_id", [None])[0])
+    plan, _costs, eco_info, horizon, lead, _review = _order_plan(s, q)
     counts = plan["status"].value_counts().to_dict() if not plan.empty else {}
     return {"horizon": horizon, "lead_time_days": lead,
             "status_counts": _jsonable(counts), "economics": _jsonable(eco_info),
@@ -398,6 +411,28 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _download(self, data: bytes, filename: str,
+                  ctype: str, status: int = 200) -> None:
+        """
+        Отдаёт файл на скачивание.
+
+        Имя файла русское, поэтому заголовок пишется в форме filename*
+        по RFC 5987: без неё браузер сохранит документ под искажённым
+        именем. Простой filename= оставлен рядом для старых клиентов.
+        """
+        from urllib.parse import quote
+
+        self.send_response(status)
+        self._cors()
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header(
+            "Content-Disposition",
+            "attachment; filename=\"order.xlsx\"; "
+            f"filename*=UTF-8''{quote(filename)}")
+        self.end_headers()
+        self.wfile.write(data)
+
     def _text(self, text: str, status: int = 200) -> None:
         body = text.encode("utf-8")
         self.send_response(status)
@@ -416,6 +451,35 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         parsed = urlparse(self.path)
         path, q = parsed.path, parse_qs(parsed.query)
+
+        if path == "/order-plan/xlsx":
+            try:
+                s_ = _session(q.get("session_id", [None])[0])
+                plan, costs, _eco, horizon, lead, review = _order_plan(s_, q)
+                rep = s_.get("report")
+                df = s_["df"]
+                meta = {
+                    "source_file": s_.get("filename", "—"),
+                    "period": (f"{df[DATE].min():%d.%m.%Y} — "
+                               f"{df[DATE].max():%d.%m.%Y}"),
+                    "horizon": horizon, "lead_time": lead,
+                    "review_period": review,
+                    "clean_report": rep.to_dict() if rep is not None else {},
+                    "model_fit": s_.get("fit") or {},
+                    "model_backend": (m.backend if (m := _model_for(s_)) else None),
+                }
+                data = build_purchase_order(
+                    _jsonable(plan), costs, meta)
+                self._download(
+                    data, order_filename(),
+                    "application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.sheet")
+            except ApiError as e:
+                self._json({"detail": e.message}, e.status)
+            except Exception as e:  # noqa: BLE001
+                traceback.print_exc()
+                self._json({"detail": f"Не удалось собрать заявку: {e}"}, 500)
+            return
 
         if path == "/clean-report/text":
             try:
@@ -538,6 +602,7 @@ class Handler(BaseHTTPRequestHandler):
         with SESSION_LOCK:
             SESSIONS[sid] = {"df": df, "report": report,
                              "model": session_model, "fit": fit,
+                             "filename": filename,
                              "created": datetime.utcnow()}
 
         _progress(uid, "Готово", 100)
