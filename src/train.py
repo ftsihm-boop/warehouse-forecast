@@ -37,8 +37,17 @@ from .schema import DATE, DEFAULT_HORIZONS, QUANTILE_HIGH, QUANTILE_LOW
 
 
 def train_global(df: pd.DataFrame, horizons: list[int] | None = None,
-                 test_days: int = 60, verbose: bool = True
+                 test_days: int = 60, verbose: bool = True,
+                 backend: str | None = None
                  ) -> tuple[QuantileModel, dict]:
+    """
+    backend — какой движок использовать. По умолчанию берётся CatBoost,
+    если он установлен в окружении. Это удобно при разработке, но мешает
+    развёртыванию: модель, сохранённая CatBoost, без него не читается,
+    а сам он весит сотни мегабайт и в серверный образ не ставится.
+    Поэтому для модели, которая поедет на сервер, движок указывается
+    явно: --backend sklearn.
+    """
     horizons = horizons or DEFAULT_HORIZONS
 
     if verbose:
@@ -58,7 +67,8 @@ def train_global(df: pd.DataFrame, horizons: list[int] | None = None,
     if verbose:
         print(f"  train: {len(train):,}  test: {len(test):,}")
 
-    model = QuantileModel(alpha_low=QUANTILE_LOW, alpha_high=QUANTILE_HIGH)
+    model = QuantileModel(alpha_low=QUANTILE_LOW, alpha_high=QUANTILE_HIGH,
+                          **({"backend": backend} if backend else {}))
     if verbose:
         print(f"  бэкенд: {model.backend}")
     model.fit(Xtr, ytr, eval_set=(Xte, yte) if len(test) else None)
@@ -100,6 +110,10 @@ def main() -> None:
     ap.add_argument("--out", default="models/global", help="куда сохранить модель")
     ap.add_argument("--horizons", type=int, nargs="+", default=DEFAULT_HORIZONS)
     ap.add_argument("--test-days", type=int, default=60)
+    ap.add_argument("--backend", choices=["catboost", "sklearn"], default=None,
+                    help="движок модели; по умолчанию CatBoost, если он "
+                         "установлен. Для развёртывания нужен sklearn: "
+                         "серверный образ собирается без CatBoost")
     ap.add_argument("--skip-clean", action="store_true",
                     help="данные уже в каноническом формате")
     a = ap.parse_args()
@@ -114,7 +128,8 @@ def main() -> None:
         print(rep.to_text())
         print()
 
-    model, report = train_global(df, a.horizons, a.test_days)
+    model, report = train_global(df, a.horizons, a.test_days,
+                                 backend=a.backend)
 
     print("\n" + "=" * 60)
     print("КАЧЕСТВО МОДЕЛИ (отложенная по времени выборка)")
