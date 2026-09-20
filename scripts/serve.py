@@ -59,7 +59,20 @@ from src.schema import DATE, QTY, SKU, STOCK  # noqa: E402
 WEB_DIR = ROOT / "web"
 MODEL_DIR = ROOT / "models" / "global"
 MAX_UPLOAD = 25 * 1024 * 1024
-SESSION_TTL = timedelta(hours=4)
+
+# Сколько живёт сессия и сколько их держать одновременно.
+#
+# В сессии лежат очищенные данные пользователя и — если модель
+# дообучалась — её персональная копия. Это десятки мегабайт на каждую
+# загрузку. Контейнеру на площадке выделено меньше трёхсот мегабайт
+# памяти, из которых полторы сотни занимают сами библиотеки, поэтому
+# копить сессии часами нельзя: несколько загрузок подряд — и процесс
+# убьют по нехватке памяти прямо во время показа.
+#
+# Час жизни покрывает любой разумный сеанс работы, а предел в три
+# сессии — одновременную демонстрацию с нескольких вкладок.
+SESSION_TTL = timedelta(hours=1)
+MAX_SESSIONS = 3
 
 # --- отслеживание этапов обработки файла ----------------------------------
 # Загрузка занимает секунды, а дообучение модели — ещё несколько, и всё
@@ -137,11 +150,24 @@ def _jsonable(obj):
 
 
 def _gc_sessions() -> None:
+    """
+    Убирает просроченные сессии и ограничивает их число.
+
+    Ограничение по количеству важнее ограничения по времени: за час
+    можно загрузить файл десять раз, и все десять наборов данных будут
+    висеть в памяти одновременно. Лишние вытесняются начиная с самых
+    старых — пользователь работает с последней загрузкой.
+    """
     now = datetime.utcnow()
     with SESSION_LOCK:
         for sid in [s for s, v in SESSIONS.items()
                     if now - v["created"] > SESSION_TTL]:
             SESSIONS.pop(sid, None)
+
+        if len(SESSIONS) > MAX_SESSIONS:
+            by_age = sorted(SESSIONS.items(), key=lambda kv: kv[1]["created"])
+            for sid, _v in by_age[:len(SESSIONS) - MAX_SESSIONS]:
+                SESSIONS.pop(sid, None)
 
 
 class ApiError(Exception):
@@ -597,13 +623,15 @@ class Handler(BaseHTTPRequestHandler):
                 print(f"  проверка модели не удалась: {e}")
 
         _progress(uid, "Готовлю прогноз…", 90)
-        _gc_sessions()
         sid = uuid.uuid4().hex
         with SESSION_LOCK:
             SESSIONS[sid] = {"df": df, "report": report,
                              "model": session_model, "fit": fit,
                              "filename": filename,
                              "created": datetime.utcnow()}
+        # Чистим ПОСЛЕ добавления: иначе новая сессия ложится сверх
+        # лимита и их фактически остаётся на одну больше.
+        _gc_sessions()
 
         _progress(uid, "Готово", 100)
         self._json({"session_id": sid, "filename": filename,

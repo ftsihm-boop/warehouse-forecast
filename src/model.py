@@ -20,6 +20,7 @@ HistGradientBoostingRegressor из sklearn: интерфейс и смысл т�
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,6 +34,25 @@ except ImportError:  # pragma: no cover
     HAS_CATBOOST = False
 
 from sklearn.ensemble import HistGradientBoostingRegressor
+
+# Число потоков для CatBoost.
+#
+# По умолчанию библиотека разворачивает поток на каждое ядро машины. В
+# контейнере это вредно: платформа выдаёт долю ядра (у нас 0.25), но
+# библиотека видит все физические ядра хоста и плодит потоки, которые
+# дерутся за урезанный процессор. Замер на двухъядерной машине: тот же
+# расчёт в один поток — 4.6 с, в восемь — 12.7 с, результат одинаковый.
+#
+# Поэтому в контейнере выставляется WAREHOUSE_THREADS=1, а на машине
+# разработчика переменной нет и библиотека работает как обычно: там
+# ядра реальные, и параллельность действительно ускоряет обучение.
+def _thread_count() -> int | None:
+    v = os.environ.get("WAREHOUSE_THREADS")
+    try:
+        return int(v) if v else None
+    except ValueError:
+        return None
+
 
 DEFAULT_PARAMS = dict(
     iterations=1200,
@@ -67,6 +87,9 @@ class QuantileModel:
     def _make(self, alpha: float, params: dict | None = None):
         p = {**DEFAULT_PARAMS, **(params or {})}
         if self.backend == "catboost":
+            threads = _thread_count()
+            if threads:
+                p = {**p, "thread_count": threads}
             return CatBoostRegressor(loss_function=f"Quantile:alpha={alpha}", **p)
         return HistGradientBoostingRegressor(
             loss="quantile", quantile=alpha,
@@ -115,8 +138,10 @@ class QuantileModel:
             for attr, alpha in (("model_low", self.alpha_low),
                                 ("model_high", self.alpha_high)):
                 base = getattr(self, attr)
-                m = CatBoostRegressor(loss_function=f"Quantile:alpha={alpha}",
-                                      **FINE_TUNE_PARAMS)
+                ft = dict(FINE_TUNE_PARAMS)
+                if (threads := _thread_count()):
+                    ft["thread_count"] = threads
+                m = CatBoostRegressor(loss_function=f"Quantile:alpha={alpha}", **ft)
                 m.fit(Xv, yv, init_model=base)
                 setattr(tuned, attr, m)
             return tuned
