@@ -168,9 +168,16 @@ def derive_sku_economics(
     holding_rate_year: float = DEFAULT_HOLDING_RATE,
     cover_days: int = 14,
     default_margin: float = DEFAULT_MARGIN,
+    cover_days_by_sku: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     """
     Выводит экономику по каждому товару из его данных.
+
+    cover_days_by_sku — срок покрытия (поставка + период между заказами)
+    для отдельных товаров. Чем он длиннее, тем дороже держать лишнюю
+    единицу до следующей поставки, а значит, ниже оптимальный уровень
+    сервиса. У товаров с долгой поставкой он получается другим, чем у
+    тех, что привозят за пару дней, — раньше это не учитывалось.
 
     Логика по убыванию точности:
       1. есть цена продажи и закупки  -> всё считается по факту
@@ -219,7 +226,8 @@ def derive_sku_economics(
         margin_abs = max(price - cost, 0.0)
         margin_rate = margin_abs / price if price > 0 else 0.0
         holding_day = cost * holding_rate_year / 365
-        holding_period = holding_day * cover_days
+        own_cover = float((cover_days_by_sku or {}).get(sku, cover_days))
+        holding_period = holding_day * own_cover
 
         level = optimal_service_level(margin_abs, holding_period)
         rows.append(SkuEconomics(

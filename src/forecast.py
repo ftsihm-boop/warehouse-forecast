@@ -263,7 +263,23 @@ def forecast_curve(df: pd.DataFrame, sku: str, horizon: int,
     fc = forecast(g, horizon=horizon, model=model, model_dir=model_dir)
     if fc.empty or not np.isfinite(fc.iloc[0]["q50"]):
         return pd.DataFrame()
-    q50, q90 = float(fc.iloc[0]["q50"]), float(fc.iloc[0]["q90"])
+    return curve_from_totals(g, float(fc.iloc[0]["q50"]),
+                             float(fc.iloc[0]["q90"]), horizon)
+
+
+def curve_from_totals(g: pd.DataFrame, q50: float, q90: float,
+                      horizon: int) -> pd.DataFrame:
+    """
+    Раскладывает готовые суммы прогноза по дням.
+
+    Отдельная функция нужна, чтобы график строился из ТОГО ЖЕ прогноза,
+    что и план заказа. Раньше кривая пересчитывала прогноз заново и могла
+    слегка разойтись с таблицей: цифра в таблице одна, площадь под
+    графиком — другая.
+    """
+    g = g.sort_values(DATE)
+    if g.empty or not (np.isfinite(q50) and np.isfinite(q90)):
+        return pd.DataFrame()
 
     qty = g[QTY].astype(float)
     if FLAG_CENSORED in g.columns:

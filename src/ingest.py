@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from .schema import (
-    COLUMN_SYNONYMS, COST, DATE, PRICE, QTY, REQUIRED_COLUMNS, SKU, STOCK,
+    COLUMN_SYNONYMS, COST, DATE, LEAD, PRICE, QTY, REQUIRED_COLUMNS, SKU, STOCK,
 )
 
 HEADER_SCAN_ROWS = 20  # сколько верхних строк просматриваем в поисках шапки
@@ -318,6 +318,15 @@ def read_table(source: str | Path | bytes, filename: str | None = None) -> Inges
             out[col] = out[col].map(parse_number)
         else:
             out[col] = np.nan
+
+    # Срок поставки по каждому товару. Если колонки нет, расчёт возьмёт
+    # единый срок из настроек, и пользователь сможет поправить его вручную.
+    if LEAD in out.columns:
+        out[LEAD] = out[LEAD].map(parse_number)
+        notes.append("Найдены сроки поставки по товарам — дата заказа будет "
+                     "рассчитана для каждого товара отдельно.")
+    else:
+        out[LEAD] = np.nan
 
     if PRICE in mapping and COST in mapping:
         notes.append("Найдены цена продажи и закупочная цена — "

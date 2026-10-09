@@ -44,17 +44,27 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from src.accuracy import assess_accuracy  # noqa: E402
+from src.anomalies import build_anomaly_report  # noqa: E402
 from src.backtest import economic_impact  # noqa: E402
 from src.cleaning import clean  # noqa: E402
+from src.dataset_info import describe_dataset  # noqa: E402
 from src.demand_classes import CLASS_LABELS_RU, profile_all  # noqa: E402
 from src.economics import derive_sku_economics, portfolio_economics  # noqa: E402
-from src.forecast import forecast, forecast_curve  # noqa: E402
+from src.enrich import feature_overview  # noqa: E402
+from src.forecast import curve_from_totals, forecast  # noqa: E402
 from src.ingest import IngestError, read_table  # noqa: E402
-from src.inventory import build_order_plan  # noqa: E402
 from src.model import QuantileModel  # noqa: E402
 from src.model_fit import adapt_to_data  # noqa: E402
 from src.order_report import build_purchase_order, order_filename  # noqa: E402
-from src.schema import DATE, QTY, SKU, STOCK  # noqa: E402
+from src.planning import (  # noqa: E402
+    SOURCE_LABELS_RU, clamp_days, effective_horizon, file_lead_times, make_plan,
+    resolve_lead_times,
+)
+from src.recommendations import build_recommendations  # noqa: E402
+from src.schema import (  # noqa: E402
+    DATE, DEFAULT_LEAD_DAYS, DEFAULT_REVIEW_DAYS, FLAG_CENSORED, QTY, SKU, STOCK,
+)
 
 WEB_DIR = ROOT / "web"
 MODEL_DIR = ROOT / "models" / "global"
@@ -71,7 +81,12 @@ MAX_UPLOAD = 25 * 1024 * 1024
 #
 # Час жизни покрывает любой разумный сеанс работы, а предел в три
 # сессии — одновременную демонстрацию с нескольких вкладок.
-SESSION_TTL = timedelta(hours=1)
+#
+# Срок скользящий: каждое обращение продлевает сессию. Менеджер, который
+# открыл сайт с утра и вернулся к нему после обеда, не должен терять
+# работу. А если сервер всё же перезапустился, страница сама загрузит
+# сохранённый файл заново (см. восстановление в web/index.html).
+SESSION_TTL = timedelta(hours=2)
 MAX_SESSIONS = 3
 
 # --- отслеживание этапов обработки файла ----------------------------------
@@ -161,11 +176,12 @@ def _gc_sessions() -> None:
     now = datetime.utcnow()
     with SESSION_LOCK:
         for sid in [s for s, v in SESSIONS.items()
-                    if now - v["created"] > SESSION_TTL]:
+                    if now - v.get("touched", v["created"]) > SESSION_TTL]:
             SESSIONS.pop(sid, None)
 
         if len(SESSIONS) > MAX_SESSIONS:
-            by_age = sorted(SESSIONS.items(), key=lambda kv: kv[1]["created"])
+            by_age = sorted(SESSIONS.items(),
+                            key=lambda kv: kv[1].get("touched", kv[1]["created"]))
             for sid, _v in by_age[:len(SESSIONS) - MAX_SESSIONS]:
                 SESSIONS.pop(sid, None)
 
@@ -193,6 +209,8 @@ def _session(sid: str | None) -> dict:
         raise ApiError(400, "Не передан session_id.")
     with SESSION_LOCK:
         s = SESSIONS.get(sid)
+        if s is not None:
+            s["touched"] = datetime.utcnow()
     if s is None:
         raise ApiError(404, "Сессия не найдена или истекла. Загрузите файл заново.")
     return s
@@ -200,8 +218,12 @@ def _session(sid: str | None) -> dict:
 
 # --- обработчики эндпоинтов ---------------------------------------------------
 
+DEMO_FILE = WEB_DIR / "demo.xlsx"   # лежит в web/: каталог data/ в образ не попадает
+
+
 def h_health(_q) -> dict:
     return {"status": "ok", "model_loaded": MODEL is not None,
+            "demo": DEMO_FILE.exists(),
             "backend": MODEL.backend if MODEL else None,
             "sessions": len(SESSIONS)}
 
@@ -219,60 +241,239 @@ def h_history(q) -> dict:
     return {"rows": _jsonable(out)}
 
 
+# --- кэш прогноза ------------------------------------------------------------
+# Прогноз зависит только от горизонта. Срок поставки, период заказов, ручные
+# правки остатков и «в пути» его не меняют — они работают с готовыми цифрами.
+# Поэтому прогноз считается один раз на горизонт и лежит в сессии, а смена
+# срока поставки пересчитывает лишь арифметику вокруг него (сотые доли секунды).
+def _forecast_cached(s: dict, horizon: int, uid: str | None = None) -> pd.DataFrame:
+    with s["fc_lock"]:
+        if horizon not in s["fc"]:
+            _progress(uid, f"Считаю прогноз на {horizon} дн.…", 60)
+            s["fc"][horizon] = forecast(s["df"], horizon=horizon,
+                                        model=_model_for(s), model_dir=None)
+        return s["fc"][horizon]
+
+
+def _accuracy_cached(s: dict, horizon: int) -> dict:
+    with s["fc_lock"]:
+        if horizon not in s["acc"]:
+            s["acc"][horizon] = _jsonable(
+                assess_accuracy(s["df"], horizon, model=_model_for(s), model_dir=None))
+        return s["acc"][horizon]
+
+
 def h_forecast(q) -> dict:
     s = _session(q.get("session_id", [None])[0])
     horizon = int(q.get("horizon", [30])[0])
-    fc = forecast(s["df"], horizon=horizon, model=_model_for(s), model_dir=None)
-    return {"horizon": horizon, "items": _jsonable(fc)}
+    return {"horizon": horizon, "items": _jsonable(_forecast_cached(s, horizon))}
 
 
 def h_forecast_curve(q) -> dict:
     s = _session(q.get("session_id", [None])[0])
     sku = q.get("sku", [None])[0]
     horizon = int(q.get("horizon", [30])[0])
-    curve = forecast_curve(s["df"], sku, horizon, model=_model_for(s), model_dir=None)
+    fc = _forecast_cached(s, horizon)
+    row = fc[fc["sku"] == sku]
+    g = s["df"][s["df"][SKU] == sku]
+    if row.empty or g.empty:
+        raise ApiError(404, f"Прогноз для «{sku}» построить не удалось.")
+    curve = curve_from_totals(g, float(row.iloc[0]["q50"]),
+                              float(row.iloc[0]["q90"]), horizon)
     if curve.empty:
         raise ApiError(404, f"Прогноз для «{sku}» построить не удалось.")
     curve = curve.assign(date=curve["date"].dt.strftime("%Y-%m-%d"))
     return {"sku": sku, "horizon": horizon, "points": _jsonable(curve)}
 
 
-def _order_plan(s: dict, q) -> tuple:
-    """
-    Считает план закупки. Вынесено отдельно, потому что этим занимаются
-    два эндпоинта: JSON для экрана и выгрузка заявки в Excel. Если бы
-    каждый считал сам, цифры на экране и в скачанном файле со временем
-    разошлись бы — и доверять было бы нечему.
-    """
+def h_sku(q) -> dict:
+    """Всё для карточки товара одним запросом: история, прогноз, показатели."""
+    s = _session(q.get("session_id", [None])[0])
+    sku = q.get("sku", [None])[0]
     horizon = int(q.get("horizon", [30])[0])
-    lead = int(q.get("lead_time_days", [7])[0])
-    review = int(q.get("review_period_days", [7])[0])
+    g = s["df"][s["df"][SKU] == sku].sort_values(DATE)
+    if g.empty:
+        raise ApiError(404, f"Товар «{sku}» не найден.")
+    hist = g[[DATE, QTY, STOCK]].copy()
+    hist["c"] = g[FLAG_CENSORED].astype(int) if FLAG_CENSORED in g.columns else 0
+    hist[DATE] = hist[DATE].dt.strftime("%Y-%m-%d")
 
-    fc = forecast(s["df"], horizon=horizon, model=_model_for(s), model_dir=None)
+    fc = _forecast_cached(s, horizon)
+    row = fc[fc["sku"] == sku]
+    curve = []
+    if not row.empty and np.isfinite(row.iloc[0]["q50"]):
+        c = curve_from_totals(g, float(row.iloc[0]["q50"]),
+                              float(row.iloc[0]["q90"]), horizon)
+        if not c.empty:
+            curve = _jsonable(c.assign(date=c["date"].dt.strftime("%Y-%m-%d")))
+    feat = next((f for f in s["features"]["table"] if f["sku"] == sku), None)
+    acc = next((a for a in (s["acc"].get(14) or {}).get("items", [])
+                if a["sku"] == sku), None)
+    return {"sku": sku, "horizon": horizon,
+            "history": [{"d": r[DATE], "q": r[QTY],
+                         "s": None if pd.isna(r[STOCK]) else r[STOCK], "c": r["c"]}
+                        for _, r in hist.iterrows()],
+            "forecast": curve, "features": feat, "accuracy": acc}
 
-    # страховой запас по каждому товару — из его собственной экономики
-    factors, costs, eco_info = None, {}, {}
-    eco = derive_sku_economics(s["df"], cover_days=lead + review)
-    if not eco.empty:
-        factors = dict(zip(eco["sku"], eco["service_factor"]))
-        costs = dict(zip(eco["sku"], eco["unit_cost"]))
-        from_data = int((eco["source"] == "данные").sum())
-        eco_info = {"prices_from_file": from_data,
-                    "prices_estimated": int(len(eco) - from_data),
-                    "avg_service_level": round(float(eco["service_level"].mean()), 3)}
 
-    plan = build_order_plan(fc, horizon_days=horizon, lead_time_days=lead,
-                            review_period_days=review, service_factors=factors)
-    return plan, costs, eco_info, horizon, lead, review
+# --- план закупки ------------------------------------------------------------
+def _parse_params(body: dict) -> dict:
+    """Приводит настройки от страницы к безопасному виду."""
+    def num_map(raw, lo, hi, integer):
+        out = {}
+        for k, v in (raw or {}).items():
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(f):
+                continue
+            f = min(max(f, lo), hi)
+            out[str(k)] = int(round(f)) if integer else f
+        return out
+
+    try:
+        horizon = int(body.get("horizon", 30))
+    except (TypeError, ValueError):
+        horizon = 30
+    return {
+        "horizon": min(max(horizon, 7), 180),
+        "default_lead": clamp_days(body.get("default_lead", DEFAULT_LEAD_DAYS)),
+        "review_period": clamp_days(body.get("review_period", DEFAULT_REVIEW_DAYS), 1, 120),
+        "lead_overrides": num_map(body.get("lead_overrides"), 1, 120, True),
+        "in_transit": num_map(body.get("in_transit"), 0, 1e9, False),
+        "stock_overrides": num_map(body.get("stock_overrides"), 0, 1e9, False),
+    }
+
+
+def _compute_plan(s: dict, params: dict, uid: str | None = None) -> dict:
+    """
+    Один расчёт плана — для экрана и для заявки в Excel. Если бы каждый
+    считал сам, цифры на экране и в скачанном файле со временем разошлись
+    бы, и доверять было бы нечему.
+    """
+    df = s["df"]
+    leads, _src = resolve_lead_times(df, params["default_lead"], params["lead_overrides"])
+    horizon, horizon_note = effective_horizon(params["horizon"], leads, params["review_period"])
+    fc = _forecast_cached(s, horizon, uid)
+    res = make_plan(df, fc, horizon, default_lead=params["default_lead"],
+                    review_period=params["review_period"],
+                    lead_overrides=params["lead_overrides"],
+                    in_transit=params["in_transit"],
+                    stock_overrides=params["stock_overrides"])
+    res["horizon"] = horizon
+    res["horizon_note"] = horizon_note
+    s["last_leads"] = res["lead_times"]          # для расчёта эффекта
+    s["last_params"] = params
+    return res
+
+
+def h_plan(body: dict) -> dict:
+    s = _session(body.get("session_id"))
+    params = _parse_params(body)
+    res = _compute_plan(s, params, body.get("uid"))
+    plan = res["plan"]
+
+    acc = s["acc"].get(14)
+    recs = build_recommendations(
+        plan, s["anomalies"], acc, s["features"]["table"],
+        res["prices"], res["costs"], lead_from_file=bool(file_lead_times(s["df"])))
+
+    items = _jsonable(plan)
+    for it in items:
+        it["lead_source_label"] = SOURCE_LABELS_RU.get(it.get("lead_source"), "")
+    return {
+        "params": {**params, "horizon_used": res["horizon"]},
+        "horizon_note": res["horizon_note"],
+        "as_of": res["as_of"].strftime("%Y-%m-%d"),
+        "summary": _jsonable(res["summary"]),
+        "economics": _jsonable(res["eco_info"]),
+        "items": items,
+        "recommendations": _jsonable(recs),
+    }
+
+
+def h_plan_xlsx_data(body: dict) -> tuple[bytes, str]:
+    s = _session(body.get("session_id"))
+    params = _parse_params(body)
+    res = _compute_plan(s, params)
+    rep = s.get("report")
+    df = s["df"]
+    items = _jsonable(res["plan"])
+    custom = sum(1 for v in res["lead_sources"].values() if v != "default")
+    meta = {
+        "source_file": s.get("filename", "—"),
+        "period": f"{df[DATE].min():%d.%m.%Y} — {df[DATE].max():%d.%m.%Y}",
+        "horizon": res["horizon"], "lead_time": params["default_lead"],
+        "lead_custom": custom or None,
+        "review_period": params["review_period"],
+        "clean_report": rep.to_dict() if rep is not None else {},
+        "model_fit": s.get("fit") or {},
+        "model_backend": (m.backend if (m := _model_for(s)) else None),
+    }
+    return build_purchase_order(items, res["costs"], meta), order_filename()
 
 
 def h_order_plan(q) -> dict:
+    """Совместимость со старым адресом: те же расчёты, настройки в адресной строке."""
+    body = {"session_id": q.get("session_id", [None])[0],
+            "horizon": q.get("horizon", [30])[0],
+            "default_lead": q.get("lead_time_days", [DEFAULT_LEAD_DAYS])[0],
+            "review_period": q.get("review_period_days", [DEFAULT_REVIEW_DAYS])[0]}
+    out = h_plan(body)
+    counts: dict[str, int] = {}
+    for it in out["items"]:
+        counts[it["status"]] = counts.get(it["status"], 0) + 1
+    out.update({"horizon": out["params"]["horizon_used"],
+                "lead_time_days": out["params"]["default_lead"],
+                "status_counts": counts})
+    return out
+
+
+# --- описание данных ------------------------------------------------------------
+def h_dataset(q) -> dict:
+    return _jsonable(_session(q.get("session_id", [None])[0])["dataset"])
+
+
+def h_features(q) -> dict:
+    return _jsonable(_session(q.get("session_id", [None])[0])["features"])
+
+
+def h_anomalies(q) -> dict:
+    return _jsonable(_session(q.get("session_id", [None])[0])["anomalies"])
+
+
+def h_accuracy(q) -> dict:
     s = _session(q.get("session_id", [None])[0])
-    plan, _costs, eco_info, horizon, lead, _review = _order_plan(s, q)
-    counts = plan["status"].value_counts().to_dict() if not plan.empty else {}
-    return {"horizon": horizon, "lead_time_days": lead,
-            "status_counts": _jsonable(counts), "economics": _jsonable(eco_info),
-            "items": _jsonable(plan)}
+    horizon = min(max(int(q.get("horizon", [14])[0]), 7), 60)
+    return _accuracy_cached(s, horizon)
+
+
+def _session_payload(sid: str, s: dict) -> dict:
+    """Всё, что странице нужно, чтобы нарисоваться после загрузки или F5."""
+    df = s["df"]
+    ds = s["dataset"]
+    return {
+        "session_id": sid, "filename": s.get("filename"),
+        "columns_detected": s.get("mapping"),
+        "report": _jsonable(s["report"].to_dict()),
+        "model_fit": _jsonable(s.get("fit")) if s.get("fit") else None,
+        "overview": _jsonable(ds["overview"]),
+        "skus": sorted(df[SKU].unique().tolist()),
+        "has_lead_column": bool(file_lead_times(df)),
+        "file_leads": file_lead_times(df),
+        "has_stock": bool(df[STOCK].notna().any()) if STOCK in df.columns else False,
+        "anomaly_headline": s["anomalies"]["headline"],
+        "anomaly_health": s["anomalies"]["health"],
+        "attention_count": s["anomalies"]["totals"]["attention_kinds"],
+        "accuracy_label": (s["acc"].get(14) or {}).get("overall_label"),
+        "accuracy_level": (s["acc"].get(14) or {}).get("overall"),
+    }
+
+
+def h_session(q) -> dict:
+    sid = q.get("session_id", [None])[0]
+    return _session_payload(sid, _session(sid))
 
 
 def h_demand_classes(q) -> dict:
@@ -320,13 +521,16 @@ def h_economic_impact(q) -> dict:
     raw_scope = (q.get("scope", ["10"])[0] or "10").lower()
     scope = None if raw_scope in ("all", "все", "0") else max(1, int(raw_scope))
 
-    key = f"impact_{lead}_{review}_{raw_scope}"
+    # если менеджер уже задавал сроки по товарам — эффект считается с ними
+    leads = s.get("last_leads") or None
+    sig = hash(tuple(sorted((leads or {}).items())))
+    key = f"impact_{lead}_{review}_{raw_scope}_{sig}"
     if key in s:
         return s[key]
 
     out = _jsonable(economic_impact(s["df"], _model_for(s), max_skus=scope,
                                     lead_time=lead, review_period=review,
-                                    fit=s.get("fit")))
+                                    fit=s.get("fit"), lead_times=leads))
     s[key] = out
     # сохраняем последний расчёт, чтобы он попал в текстовый отчёт
     s["last_impact"] = out
@@ -338,6 +542,12 @@ ROUTES = {
     "/history": h_history,
     "/forecast": h_forecast,
     "/forecast/curve": h_forecast_curve,
+    "/sku": h_sku,
+    "/session": h_session,
+    "/dataset": h_dataset,
+    "/features": h_features,
+    "/anomalies": h_anomalies,
+    "/accuracy": h_accuracy,
     "/order-plan": h_order_plan,
     "/demand-classes": h_demand_classes,
     "/economics": h_economics,
@@ -345,6 +555,9 @@ ROUTES = {
     "/economic-impact": h_economic_impact,
     "/upload-progress": h_upload_progress,
 }
+
+XLSX_TYPE = ("application/vnd.openxmlformats-officedocument."
+             "spreadsheetml.sheet")
 
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
                 ".js": "application/javascript; charset=utf-8",
@@ -480,31 +693,30 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/order-plan/xlsx":
             try:
-                s_ = _session(q.get("session_id", [None])[0])
-                plan, costs, _eco, horizon, lead, review = _order_plan(s_, q)
-                rep = s_.get("report")
-                df = s_["df"]
-                meta = {
-                    "source_file": s_.get("filename", "—"),
-                    "period": (f"{df[DATE].min():%d.%m.%Y} — "
-                               f"{df[DATE].max():%d.%m.%Y}"),
-                    "horizon": horizon, "lead_time": lead,
-                    "review_period": review,
-                    "clean_report": rep.to_dict() if rep is not None else {},
-                    "model_fit": s_.get("fit") or {},
-                    "model_backend": (m.backend if (m := _model_for(s_)) else None),
-                }
-                data = build_purchase_order(
-                    _jsonable(plan), costs, meta)
-                self._download(
-                    data, order_filename(),
-                    "application/vnd.openxmlformats-officedocument."
-                    "spreadsheetml.sheet")
+                data, name = h_plan_xlsx_data({
+                    "session_id": q.get("session_id", [None])[0],
+                    "horizon": q.get("horizon", [30])[0],
+                    "default_lead": q.get("lead_time_days", [DEFAULT_LEAD_DAYS])[0],
+                    "review_period": q.get("review_period_days", [DEFAULT_REVIEW_DAYS])[0]})
+                self._download(data, name, XLSX_TYPE)
             except ApiError as e:
                 self._json({"detail": e.message}, e.status)
             except Exception as e:  # noqa: BLE001
                 traceback.print_exc()
                 self._json({"detail": f"Не удалось собрать заявку: {e}"}, 500)
+            return
+
+        if path == "/demo.xlsx":
+            if not DEMO_FILE.exists():
+                self._text("Not found", 404)
+                return
+            body = DEMO_FILE.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", XLSX_TYPE)
+            self.send_header("Content-Length", str(len(body)))
+            self._cors()
+            self.end_headers()
+            self.wfile.write(body)
             return
 
         if path == "/clean-report/text":
@@ -555,12 +767,29 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     # --- POST ---------------------------------------------------------------
-    def do_POST(self):  # noqa: N802
-        if urlparse(self.path).path != "/upload":
-            self._json({"detail": "Неизвестный адрес."}, 404)
-            return
+    def _read_json(self) -> dict:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            return {}
+        if length > 2 * 1024 * 1024:
+            raise ApiError(413, "Слишком большой запрос.")
         try:
-            self._handle_upload()
+            return json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+        except (ValueError, UnicodeDecodeError) as e:
+            raise ApiError(400, "Запрос не разобран.") from e
+
+    def do_POST(self):  # noqa: N802
+        path = urlparse(self.path).path
+        try:
+            if path == "/upload":
+                self._handle_upload()
+            elif path == "/plan":
+                self._json(h_plan(self._read_json()))
+            elif path == "/plan/xlsx":
+                data, name = h_plan_xlsx_data(self._read_json())
+                self._download(data, name, XLSX_TYPE)
+            else:
+                self._json({"detail": "Неизвестный адрес."}, 404)
         except ApiError as e:
             self._json({"detail": e.message}, e.status)
         except Exception as e:  # noqa: BLE001
@@ -622,22 +851,31 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001
                 print(f"  проверка модели не удалась: {e}")
 
-        _progress(uid, "Готовлю прогноз…", 90)
+        _progress(uid, "Описываю данные и ищу аномалии…", 70)
         sid = uuid.uuid4().hex
+        sess = {"df": df, "report": report, "model": session_model, "fit": fit,
+                "filename": filename, "mapping": ingested.mapping,
+                "created": datetime.utcnow(), "touched": datetime.utcnow(),
+                "fc": {}, "acc": {}, "fc_lock": threading.RLock()}
+        sess["dataset"] = describe_dataset(df, report)
+        sess["anomalies"] = build_anomaly_report(df, report)
+        sess["features"] = feature_overview(df)
+
+        # Первый прогноз и оценка точности считаются сразу, пока человек
+        # смотрит на индикатор: так экран «Что заказать» откроется мгновенно.
+        _progress(uid, "Строю прогноз спроса…", 80)
+        _forecast_cached(sess, 30, uid)
+        _progress(uid, "Проверяю точность на прошлом…", 92)
+        _accuracy_cached(sess, 14)
+
         with SESSION_LOCK:
-            SESSIONS[sid] = {"df": df, "report": report,
-                             "model": session_model, "fit": fit,
-                             "filename": filename,
-                             "created": datetime.utcnow()}
+            SESSIONS[sid] = sess
         # Чистим ПОСЛЕ добавления: иначе новая сессия ложится сверх
         # лимита и их фактически остаётся на одну больше.
         _gc_sessions()
 
         _progress(uid, "Готово", 100)
-        self._json({"session_id": sid, "filename": filename,
-                    "columns_detected": ingested.mapping,
-                    "report": _jsonable(report.to_dict()),
-                    "model_fit": _jsonable(fit) if fit else None})
+        self._json(_session_payload(sid, sess))
 
 
 def main() -> None:

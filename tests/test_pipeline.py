@@ -526,6 +526,148 @@ def test_adapt_without_model_is_safe():
     assert not rep.suitable
 
 
+# ---------------------------------------------------------------------------
+#  Заказы в днях, аномалии, точность, советы
+# ---------------------------------------------------------------------------
+def _series_df(n=200, skus=("A", "B"), seed=1, lead=None):
+    rng = np.random.default_rng(seed)
+    rows = []
+    for sku in skus:
+        stock = 300.0
+        for i, d in enumerate(pd.date_range("2026-01-01", periods=n)):
+            q = float(max(0, round(rng.normal(20, 3))))
+            stock = max(stock - q, 0) + (150 if i % 10 == 9 else 0)
+            row = {DATE: d, SKU: sku, QTY: q, STOCK: stock, PRICE: 100.0, COST: 70.0}
+            if lead:
+                row["lead_days"] = lead[sku]
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def test_order_in_days_depends_on_own_lead_time():
+    from src.inventory import compute_order
+    base = dict(sku="X", q50_horizon=300.0, q90_horizon=360.0, horizon_days=30,
+                stock=200.0, mode="global", review_period_days=7,
+                as_of=pd.Timestamp("2026-10-01"))
+    fast = compute_order(lead_time_days=2, **base)
+    slow = compute_order(lead_time_days=10, **base)
+    # у долгой поставки дата заказа раньше, а при нехватке остатка — «сегодня»
+    assert slow.order_in_days < fast.order_in_days
+    assert fast.order_by_date > slow.order_by_date
+
+
+def test_gap_when_stock_ends_before_delivery():
+    from src.inventory import compute_order
+    o = compute_order("X", 300.0, 360.0, 30, stock=20.0, mode="global",
+                      lead_time_days=10, review_period_days=7,
+                      as_of=pd.Timestamp("2026-10-01"))
+    assert o.stockout_gap_days > 0 and o.expected_lost_units > 0
+    assert o.order_in_days == 0
+
+
+def test_in_transit_extends_coverage():
+    from src.inventory import compute_order
+    kw = dict(sku="X", q50_horizon=300.0, q90_horizon=360.0, horizon_days=30,
+              stock=100.0, mode="global", lead_time_days=5, review_period_days=7,
+              as_of=pd.Timestamp("2026-10-01"))
+    a = compute_order(**kw)
+    b = compute_order(in_transit=200.0, **kw)
+    assert b.recommended_order < a.recommended_order
+
+
+def test_lead_time_priority_manual_over_file_over_default():
+    from src.planning import resolve_lead_times
+    df = _series_df(lead={"A": 4, "B": 9})
+    used, src = resolve_lead_times(df, 7, {"A": 12})
+    assert used["A"] == 12 and src["A"] == "manual"
+    assert used["B"] == 9 and src["B"] == "file"
+    df2 = df.drop(columns=["lead_days"])
+    used2, src2 = resolve_lead_times(df2, 7)
+    assert used2["A"] == 7 and src2["A"] == "default"
+
+
+def test_lead_time_column_recognized():
+    assert match_column("Срок поставки, дн") == "lead_days"
+    assert match_column("Lead time") == "lead_days"
+
+
+def test_effective_horizon_grows_with_long_lead():
+    from src.planning import effective_horizon
+    h, note = effective_horizon(14, {"A": 25}, 7)
+    assert h >= 32 and note
+    h2, note2 = effective_horizon(30, {"A": 5}, 7)
+    assert h2 == 30 and note2 is None
+
+
+def test_plan_actions_and_summary():
+    from src.planning import make_plan
+    df, _ = clean(_ing(_series_df()))
+    fc = forecast(df, 14, model=None, model_dir=None)
+    res = make_plan(df, fc, 14, default_lead=5, stock_overrides={"A": 5})
+    plan = res["plan"].set_index("sku")
+    assert plan.loc["A", "stock"] == 5
+    assert plan.loc["A", "action_kind"] == "now"
+    assert res["summary"]["total"] == 2
+
+
+def _ing(df):
+    return IngestResult(frame=df, sheet_name=None, header_row=0, mapping={})
+
+
+def test_anomaly_catalog_finds_return_and_idle():
+    from src.anomalies import build_anomaly_report
+    raw = _series_df(n=240, skus=("A", "B"))
+    raw.loc[10, QTY] = -3                       # возврат
+    last = raw[DATE].max()
+    m = (raw[SKU] == "B") & (raw[DATE] > last - pd.Timedelta(days=60))
+    raw.loc[m, QTY] = 0                         # товар перестал продаваться
+    df, rep = clean(_ing(raw))
+    a = build_anomaly_report(df, rep)
+    codes = {g["code"] for g in a["groups"]}
+    assert "return" in codes and "idle" in codes
+    idle = next(g for g in a["groups"] if g["code"] == "idle")
+    assert idle["severity"] == "attention" and "B" in idle["skus"]
+
+
+def test_accuracy_levels_are_words():
+    from src.accuracy import assess_accuracy
+    df, _ = clean(_ing(_series_df(n=320)))
+    r = assess_accuracy(df, 14, model=None, model_dir=None)
+    assert r["overall"] in ("excellent", "good", "low")
+    for it in r["items"]:
+        assert it["level"] in ("excellent", "good", "low", "unknown", "none")
+        assert it["level_label"]
+
+
+def test_recommendations_urgent_for_shortage():
+    from src.planning import make_plan
+    from src.recommendations import build_recommendations
+    df, _ = clean(_ing(_series_df()))
+    fc = forecast(df, 14, model=None, model_dir=None)
+    res = make_plan(df, fc, 14, default_lead=10, stock_overrides={"A": 3})
+    rec = build_recommendations(res["plan"], None, None, None, res["prices"], res["costs"])
+    assert any(r["group"] == "urgent" for r in rec["items"])
+    assert rec["headline"].startswith("Нужно действовать")
+
+
+def test_dataset_description_reports_missing_columns():
+    from src.dataset_info import describe_dataset
+    raw = _series_df().drop(columns=[PRICE, COST])
+    df, rep = clean(_ing(raw))
+    d = describe_dataset(df, rep)
+    price = next(c for c in d["columns"] if c["column"] == PRICE)
+    assert not price["present"] and price["hint"]
+    assert d["overview"]["sku_count"] == 2
+
+
+def test_feature_overview_has_model_groups_and_sku_table():
+    from src.enrich import feature_overview
+    df, _ = clean(_ing(_series_df(n=300)))
+    f = feature_overview(df)
+    assert f["model_feature_total"] == len(FEATURE_COLUMNS)
+    assert {r["sku"] for r in f["table"]} == {"A", "B"}
+
+
 if __name__ == "__main__":
     fns = [(n, f) for n, f in sorted(globals().items())
            if n.startswith("test_") and callable(f)]

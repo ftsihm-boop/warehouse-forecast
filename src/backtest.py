@@ -365,6 +365,7 @@ def tune_portfolio(
     only_forecastable: bool = True,
     allow_manual: bool = True,
     verbose: bool = False,
+    lead_times: dict[str, float] | None = None,
 ) -> dict:
     """
     Подбирает страховой запас ПО КАЖДОМУ ТОВАРУ и решает, каким товаром
@@ -401,6 +402,12 @@ def tune_portfolio(
         return {}
 
     cover = lead_time + review_period
+    lead_times = lead_times or {}
+
+    def lead_of(sku_name) -> int:
+        """Срок поставки товара: свой, если задан, иначе общий."""
+        v = lead_times.get(str(sku_name), lead_times.get(sku_name))
+        return int(round(v)) if v is not None and np.isfinite(v) else lead_time
 
     excluded = 0
     if only_forecastable:
@@ -418,8 +425,11 @@ def tune_portfolio(
     chosen = ranked.index if max_skus is None else ranked.head(max_skus).index
 
     # теоретический оптимум по каждому товару — центр его личной сетки
-    eco = derive_sku_economics(df, holding_rate_year=econ.holding_rate_year,
-                               cover_days=cover, default_margin=econ.margin)
+    eco = derive_sku_economics(
+        df, holding_rate_year=econ.holding_rate_year, cover_days=cover,
+        default_margin=econ.margin,
+        cover_days_by_sku={str(k): lead_of(k) + review_period
+                           for k in df[SKU].unique()})
     theo_by_sku = ({str(r["sku"]): float(r["service_factor"])
                     for _, r in eco.iterrows()} if not eco.empty else {})
 
@@ -439,7 +449,7 @@ def tune_portfolio(
                        for m in (0.3, 0.5, 0.75, 1.0, 1.3, 1.7, 2.2)})
 
         r = backtest_sku_factors(g, model, grid, econ=econ, test_days=test_days,
-                                 lead_time=lead_time, review_period=review_period)
+                                 lead_time=lead_of(sku), review_period=review_period)
         if not r:
             continue
         base = r["baseline"]
@@ -476,7 +486,7 @@ def tune_portfolio(
                 break
             extra = backtest_sku_factors(
                 g, model, [nxt_f], econ=econ, test_days=test_days,
-                lead_time=lead_time, review_period=review_period)
+                lead_time=lead_of(sku), review_period=review_period)
             if not extra:
                 break
             nxt = evaluate(extra["by_factor"])[0]
@@ -563,6 +573,7 @@ def economic_impact(
     review_period: int = 7,
     tune_skus: int = 10,
     fit: dict | None = None,
+    lead_times: dict[str, float] | None = None,
 ) -> dict:
     """
     Экономический эффект для показа в интерфейсе.
@@ -594,7 +605,8 @@ def economic_impact(
     tuned = tune_portfolio(df, model, econ=econ, test_days=test_days,
                            lead_time=lead_time, review_period=review_period,
                            max_skus=max_skus,
-                           allow_manual=service_factor is None)
+                           allow_manual=service_factor is None,
+                           lead_times=lead_times)
     if not tuned:
         return {"error": "Не удалось рассчитать эффект на этих данных."}
 
@@ -656,6 +668,11 @@ def economic_impact(
     }
 
 
+def _pl(n: int) -> str:
+    """«по 1 товару / по 2 товарам / по 5 товарам» — дательный падеж после «по»."""
+    return "товару" if int(n) % 10 == 1 and int(n) % 100 != 11 else "товарам"
+
+
 def _diagnose(summary: dict, factor: float, theoretical: float | None,
               fit: dict | None = None, tuned: dict | None = None) -> dict:
     """
@@ -692,7 +709,7 @@ def _diagnose(summary: dict, factor: float, theoretical: float | None,
         names = ", ".join(str(s)[:34] for s in manual_names[:3])
         tail = f" и ещё {manual - 3}" if manual > 3 else ""
         notes.append(
-            f"По {manual} товар(ам) система оставила ручное планирование: "
+            f"По {manual} {_pl(manual)} система оставила ручное планирование: "
             f"{names}{tail}. На них прогноз не даёт выигрыша — спрос "
             "слишком неровный, и любой страховой запас стоит дороже, чем "
             "экономит. Эти товары в эффект не засчитаны, закупайте их "
@@ -745,7 +762,7 @@ def _diagnose(summary: dict, factor: float, theoretical: float | None,
                        "планирования: " if managed else "")
         notes.append(managed_txt + "запас меньше, дефицита не больше.")
     elif effect > 0 and managed:
-        notes.insert(0, f"По {managed} товар(ам) закупка идёт по прогнозу, "
+        notes.insert(0, f"По {managed} {_pl(managed)} закупка идёт по прогнозу, "
                         f"и на них система выигрывает у ручного планирования.")
 
     return {"level": level, "notes": notes}

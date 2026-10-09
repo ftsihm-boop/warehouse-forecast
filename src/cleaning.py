@@ -29,7 +29,7 @@ import pandas as pd
 
 from .ingest import IngestResult, sku_key
 from .schema import (
-    COST, DATE, FLAG_CENSORED, FLAG_FILLED, FLAG_RETURN, FLAG_WINSORIZED,
+    COST, DATE, FLAG_CENSORED, LEAD, FLAG_FILLED, FLAG_RETURN, FLAG_WINSORIZED,
     GLOBAL_HISTORY_DAYS, MIN_HISTORY_DAYS, MODE_FINE_TUNE, MODE_GLOBAL,
     MODE_REJECT, MODE_STATS, PRICE, QTY, SKU, STATS_HISTORY_DAYS, STOCK,
 )
@@ -58,6 +58,10 @@ class CleaningReport:
     notes: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     per_sku: list[dict] = field(default_factory=list)
+    # Журнал исправлений: что именно было в файле и во что мы это превратили.
+    # Хранится ограниченное число записей — важна наглядность, а не полнота;
+    # точные количества по каждому типу лежат в счётчиках выше.
+    changes: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -94,6 +98,31 @@ class CleaningReport:
             L.append("ПРЕДУПРЕЖДЕНИЯ:")
             L += [f"  ! {w}" for w in self.warnings]
         return "\n".join(L)
+
+
+MAX_LOGGED_CHANGES = 400   # всего записей журнала
+MAX_LOGGED_PER_KIND = 80   # из них на один тип, чтобы один тип не вытеснил остальные
+
+
+def _log(rep: "CleaningReport", kind: str, sku, date, before, after,
+         note: str = "") -> None:
+    """Добавляет запись в журнал исправлений, если место ещё есть."""
+    if len(rep.changes) >= MAX_LOGGED_CHANGES:
+        return
+    if sum(1 for c in rep.changes if c["kind"] == kind) >= MAX_LOGGED_PER_KIND:
+        return
+
+    def fmt(v):
+        if v is None or (isinstance(v, float) and not np.isfinite(v)):
+            return None
+        return round(float(v), 2) if isinstance(v, (int, float, np.number)) else v
+
+    rep.changes.append({
+        "kind": kind, "sku": str(sku),
+        "date": (pd.Timestamp(date).strftime("%Y-%m-%d")
+                 if date is not None and pd.notna(date) else None),
+        "before": fmt(before), "after": fmt(after), "note": note,
+    })
 
 
 def _merge_similar_skus(df: pd.DataFrame, report: CleaningReport) -> pd.DataFrame:
@@ -170,6 +199,9 @@ def clean(ingested: IngestResult, fill_missing_dates: bool = True,
     # --- слой 3.2: возвраты -------------------------------------------------
     neg = df[QTY] < 0
     rep.returns_zeroed = int(neg.sum())
+    for _, r in df[neg].head(MAX_LOGGED_PER_KIND).iterrows():
+        _log(rep, "return", r[SKU], r[DATE], r[QTY], 0.0,
+             "Отрицательные продажи — возврат товара")
     df[FLAG_RETURN] = neg.values
     df.loc[neg, QTY] = 0.0
 
@@ -177,6 +209,9 @@ def clean(ingested: IngestResult, fill_missing_dates: bool = True,
     if STOCK in df.columns:
         neg_stock = df[STOCK] < 0
         rep.negative_stock_fixed = int(neg_stock.sum())
+        for _, r in df[neg_stock].head(MAX_LOGGED_PER_KIND).iterrows():
+            _log(rep, "negative_stock", r[SKU], r[DATE], r[STOCK], 0.0,
+                 "Остаток не может быть меньше нуля")
         df.loc[neg_stock, STOCK] = 0.0
 
     # --- слой 3.4: склейка наименований ------------------------------------
@@ -184,10 +219,16 @@ def clean(ingested: IngestResult, fill_missing_dates: bool = True,
 
     # --- слой 3.5: дубли ----------------------------------------------------
     before = len(df)
+    dup = df[df.duplicated([SKU, DATE], keep=False)]
+    if not dup.empty:
+        for (sku_, date_), g_ in list(dup.groupby([SKU, DATE]))[:MAX_LOGGED_PER_KIND]:
+            _log(rep, "duplicate", sku_, date_, f"{len(g_)} {'строки' if len(g_) < 5 else 'строк'}",
+                 float(g_[QTY].sum()),
+                 "Несколько строк за один день по одному товару — сложены")
     # Количество суммируем, остаток берём последний за день, цены —
     # средние (в течение дня цена могла меняться, например из-за промо).
     agg = {QTY: "sum", STOCK: "last", FLAG_RETURN: "max",
-           PRICE: "mean", COST: "mean"}
+           PRICE: "mean", COST: "mean", LEAD: "last"}
     df = (df.groupby([SKU, DATE], as_index=False)
             .agg({k: v for k, v in agg.items() if k in df.columns}))
     rep.duplicates_merged = before - len(df)
@@ -209,7 +250,7 @@ def clean(ingested: IngestResult, fill_missing_dates: bool = True,
                 g[STOCK] = g[STOCK].ffill()
             # цены тоже тянем вперёд и назад: в день без продаж цена
             # в выгрузке отсутствует, но сам товар никуда не делся
-            for col in (PRICE, COST):
+            for col in (PRICE, COST, LEAD):
                 if col in g.columns:
                     g[col] = g[col].ffill().bfill()
             if FLAG_RETURN in g.columns:
@@ -225,7 +266,13 @@ def clean(ingested: IngestResult, fill_missing_dates: bool = True,
         parts = []
         for _, g in df.groupby(SKU, sort=False):
             g = g.copy()
+            raw_vals = g[QTY].copy()
             vals, flag = _winsorize_group(g[QTY])
+            if flag.any():
+                for ix in g.index[flag.values][:MAX_LOGGED_PER_KIND]:
+                    _log(rep, "outlier", g.at[ix, SKU], g.at[ix, DATE],
+                         raw_vals.at[ix], vals.at[ix],
+                         "Резкий всплеск продаж — значение ограничено")
             g[QTY] = vals
             g[FLAG_WINSORIZED] = flag.values
             rep.outliers_winsorized += int(flag.sum())

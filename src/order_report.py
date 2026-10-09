@@ -95,6 +95,16 @@ def _num(v, default=None):
     return default if not np.isfinite(f) else f
 
 
+def _fmt_date(v) -> str:
+    """ГГГГ-ММ-ДД -> ДД.ММ.ГГГГ; пусто -> прочерк."""
+    if not v:
+        return "—"
+    try:
+        return pd.Timestamp(v).strftime("%d.%m.%Y")
+    except (ValueError, TypeError):
+        return str(v)
+
+
 def _header_row(ws, row: int, titles: list[str]) -> None:
     for i, t in enumerate(titles, start=1):
         c = ws.cell(row=row, column=i, value=t)
@@ -120,36 +130,49 @@ def _sheet_request(wb: Workbook, items: list[dict], costs: dict[str, float],
 
     ws["A1"] = "ЗАЯВКА НА ЗАКУПКУ"
     ws["A1"].font = TITLE_FONT
-    ws.merge_cells("A1:I1")
+    ws.merge_cells("A1:K1")
 
     ws["A2"] = ("Сформирована автоматически системой управления складскими "
                 "запасами на основании прогноза спроса")
     ws["A2"].font = MUTED_FONT
-    ws.merge_cells("A2:I2")
+    ws.merge_cells("A2:K2")
 
+    lead_note = f"{meta.get('lead_time', '—')} дн. (общий)"
+    if meta.get("lead_custom"):
+        lead_note += f"; у {meta['lead_custom']} товаров свой срок — указан в таблице"
     info = [
         ("Дата формирования:", meta.get("generated_at", "")),
         ("Источник данных:", meta.get("source_file", "—")),
         ("Горизонт планирования:", f"{meta.get('horizon', '—')} дн."),
-        ("Срок поставки:", f"{meta.get('lead_time', '—')} дн."),
+        ("Срок поставки:", lead_note),
     ]
     for i, (label, value) in enumerate(info, start=4):
         ws.cell(row=i, column=1, value=label).font = Font(name=FONT, size=10, bold=True)
         ws.cell(row=i, column=3, value=value).font = BASE_FONT
-        ws.merge_cells(start_row=i, start_column=3, end_row=i, end_column=6)
+        ws.merge_cells(start_row=i, start_column=3, end_row=i, end_column=8)
 
     head = 9
     _header_row(ws, head, [
-        "№", "Товар", "Срочность", "Остаток,\nшт", "Хватит\nна, дней",
-        "Ожидаемое\nисчерпание", "К заказу,\nшт", "Цена закупки,\n₽",
-        "Сумма,\n₽",
+        "№", "Товар", "Что делать", "Остаток,\nшт", "В пути,\nшт",
+        "Срок\nпоставки, дн.", "Заказать\nдо", "К заказу,\nшт",
+        "Цена закупки,\n₽", "Сумма,\n₽", "Хватит\nдо",
     ])
 
     # только то, что действительно нужно заказать; сначала самое срочное
     order_rank = {"critical": 0, "alert": 1, "ok": 2, "excess": 3}
     need = [it for it in items if (_num(it.get("recommended_order"), 0) or 0) > 0]
     need.sort(key=lambda it: (order_rank.get(it.get("status"), 9),
+                              _num(it.get("order_in_days"), 9999),
                               -(_num(it.get("recommended_order"), 0) or 0)))
+
+    def _d(v):
+        """ГГГГ-ММ-ДД -> ДД.ММ.ГГГГ для документа."""
+        if not v:
+            return "—"
+        try:
+            return pd.Timestamp(v).strftime("%d.%m.%Y")
+        except (ValueError, TypeError):
+            return str(v)
 
     r = head + 1
     for n, it in enumerate(need, start=1):
@@ -157,34 +180,48 @@ def _sheet_request(wb: Workbook, items: list[dict], costs: dict[str, float],
         status = it.get("status", "ok")
         qty = _num(it.get("recommended_order"), 0) or 0
         cost = _num(costs.get(sku))
-        dos = _num(it.get("days_of_supply"))
         stock = _num(it.get("stock"))
+        transit = _num(it.get("in_transit"), 0) or 0
+        lead = _num(it.get("lead_time_days"))
+        gap = int(_num(it.get("stockout_gap_days"), 0) or 0)
+        oid = _num(it.get("order_in_days"))
+
+        if gap > 0:
+            todo = f"Срочно (без товара ~{gap} дн.)"
+        elif oid is not None and oid <= 0:
+            todo = "Заказать сегодня"
+        else:
+            todo = it.get("action") or URGENCY_TEXT.get(status, status)
 
         ws.cell(row=r, column=1, value=n)
         ws.cell(row=r, column=2, value=sku)
-        ws.cell(row=r, column=3, value=URGENCY_TEXT.get(status, status))
+        ws.cell(row=r, column=3, value=todo)
         ws.cell(row=r, column=4, value=round(stock) if stock is not None else "нет данных")
-        ws.cell(row=r, column=5,
-                value=round(dos) if dos is not None and dos >= 0 else "—")
-        ws.cell(row=r, column=6, value=it.get("stockout_date") or "—")
-        ws.cell(row=r, column=7, value=round(qty))
-        ws.cell(row=r, column=8, value=round(cost, 2) if cost is not None else None)
+        ws.cell(row=r, column=5, value=round(transit) if transit else "—")
+        ws.cell(row=r, column=6, value=round(lead) if lead is not None else "—")
+        ws.cell(row=r, column=7, value=_d(it.get("order_by_date")))
+        ws.cell(row=r, column=8, value=round(qty))
+        ws.cell(row=r, column=9, value=round(cost, 2) if cost is not None else None)
         # Сумма — формула, а не число: снабженец правит количество,
         # и стоимость пересчитывается сама.
-        ws.cell(row=r, column=9, value=f"=G{r}*H{r}")
+        ws.cell(row=r, column=10, value=f"=H{r}*I{r}")
+        ws.cell(row=r, column=11, value=_d(it.get("covered_until")))
 
-        for col in range(1, 10):
+        for col in range(1, 12):
             c = ws.cell(row=r, column=col)
             c.font = BASE_FONT
             c.border = BORDER
             c.alignment = Alignment(
-                horizontal="left" if col == 2 else "center", vertical="center")
+                horizontal="left" if col in (2, 3) else "center",
+                vertical="center", wrap_text=(col == 3))
         ws.cell(row=r, column=4).number_format = QTY
-        ws.cell(row=r, column=7).number_format = QTY
-        ws.cell(row=r, column=8).number_format = MONEY
+        ws.cell(row=r, column=8).number_format = QTY
         ws.cell(row=r, column=9).number_format = MONEY
+        ws.cell(row=r, column=10).number_format = MONEY
 
-        if status in URGENCY_FILL:
+        if gap > 0:
+            ws.cell(row=r, column=3).fill = URGENCY_FILL["critical"]
+        elif status in URGENCY_FILL:
             ws.cell(row=r, column=3).fill = URGENCY_FILL[status]
         r += 1
 
@@ -192,15 +229,15 @@ def _sheet_request(wb: Workbook, items: list[dict], costs: dict[str, float],
         ws.cell(row=r, column=1,
                 value="Заказ не требуется: текущих остатков хватает на весь "
                       "горизонт планирования по всем позициям.").font = BASE_FONT
-        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=9)
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=11)
         r += 1
         total_row = None
     else:
         total_row = r
         ws.cell(row=r, column=2, value=f"ИТОГО позиций: {len(need)}").font = TOTAL_FONT
-        ws.cell(row=r, column=8, value="Сумма заказа:").font = TOTAL_FONT
-        ws.cell(row=r, column=8).alignment = Alignment(horizontal="right")
-        total = ws.cell(row=r, column=9, value=f"=SUM(I{head + 1}:I{r - 1})")
+        ws.cell(row=r, column=9, value="Сумма заказа:").font = TOTAL_FONT
+        ws.cell(row=r, column=9).alignment = Alignment(horizontal="right")
+        total = ws.cell(row=r, column=10, value=f"=SUM(J{head + 1}:J{r - 1})")
         total.font = TOTAL_FONT
         total.number_format = MONEY
         total.border = Border(top=Side(style="double", color="1F5F5B"))
@@ -216,18 +253,21 @@ def _sheet_request(wb: Workbook, items: list[dict], costs: dict[str, float],
         "остатка. Срочность: «Критично» — запаса не хватит до прихода "
         "поставки; «Срочно» — остаток ниже точки заказа; «Плановое» — "
         "остаток ещё выше точки заказа, это дозаказ до целевого уровня. "
-        "Цены закупки взяты из загруженной выгрузки продаж. "
+        "«Заказать до» — последняя дата, когда заказ ещё успеет прийти до "
+        "исчерпания остатка с учётом срока поставки именно этого товара; "
+        "«Хватит до» — до какой даты хватит товара, если заказать указанное "
+        "количество. Цены закупки взяты из загруженной выгрузки продаж. "
         "Столбец «Сумма» и итог — формулы: при изменении количества "
         "пересчитываются автоматически."))
     note.font = MUTED_FONT
     note.alignment = Alignment(wrap_text=True, vertical="top")
-    ws.merge_cells(start_row=r + 3, start_column=1, end_row=r + 4, end_column=9)
+    ws.merge_cells(start_row=r + 3, start_column=1, end_row=r + 4, end_column=11)
 
-    _widths(ws, {"A": 5, "B": 42, "C": 12, "D": 11, "E": 11,
-                 "F": 15, "G": 11, "H": 15, "I": 16})
+    _widths(ws, {"A": 5, "B": 40, "C": 24, "D": 10, "E": 9, "F": 12,
+                 "G": 13, "H": 11, "I": 14, "J": 16, "K": 13})
     ws.freeze_panes = f"A{head + 1}"
     if need:
-        ws.auto_filter.ref = f"A{head}:I{head + len(need)}"
+        ws.auto_filter.ref = f"A{head}:K{head + len(need)}"
     ws.print_title_rows = f"{head}:{head}"
     return len(need)
 
@@ -240,7 +280,7 @@ def _sheet_plan(wb: Workbook, items: list[dict]) -> None:
 
     ws["A1"] = "ПЛАН ПОПОЛНЕНИЯ ПО ВСЕМ ТОВАРАМ"
     ws["A1"].font = TITLE_FONT
-    ws.merge_cells("A1:K1")
+    ws.merge_cells("A1:N1")
     ws["A2"] = ("Включая позиции, по которым заказ сейчас не требуется, — "
                 "для контроля и планирования")
     ws["A2"].font = MUTED_FONT
@@ -250,7 +290,8 @@ def _sheet_plan(wb: Workbook, items: list[dict]) -> None:
     _header_row(ws, head, [
         "Товар", "Статус", "Остаток,\nшт", "Прогноз спроса\nза горизонт",
         "Верхняя\nграница", "Страховой\nзапас", "Точка\nзаказа",
-        "К заказу,\nшт", "Хватит\nна, дней", "Режим\nпрогноза", "Примечание",
+        "К заказу,\nшт", "Хватит\nна, дней", "Срок\nпоставки, дн.",
+        "Заказать\nдо", "Хватит после\nзаказа до", "Режим\nпрогноза", "Примечание",
     ])
 
     mode_ru = {"fine_tune": "дообучение", "global": "общая модель",
@@ -270,6 +311,9 @@ def _sheet_plan(wb: Workbook, items: list[dict]) -> None:
             round(_num(it.get("reorder_point"), 0) or 0),
             round(_num(it.get("recommended_order"), 0) or 0),
             round(dos) if dos is not None and dos >= 0 else "—",
+            round(_num(it.get("lead_time_days"))) if _num(it.get("lead_time_days")) is not None else "—",
+            _fmt_date(it.get("order_by_date")),
+            _fmt_date(it.get("covered_until")),
             mode_ru.get(it.get("mode"), it.get("mode", "")),
             it.get("note", ""),
         ]
@@ -278,8 +322,8 @@ def _sheet_plan(wb: Workbook, items: list[dict]) -> None:
             c.font = BASE_FONT
             c.border = BORDER
             c.alignment = Alignment(
-                horizontal="left" if col in (1, 10, 11) else "center",
-                vertical="center", wrap_text=(col == 11))
+                horizontal="left" if col in (1, 13, 14) else "center",
+                vertical="center", wrap_text=(col == 14))
             if col in (3, 4, 5, 6, 7, 8):
                 c.number_format = QTY
         if it.get("status") in URGENCY_FILL:
@@ -287,10 +331,11 @@ def _sheet_plan(wb: Workbook, items: list[dict]) -> None:
         r += 1
 
     _widths(ws, {"A": 42, "B": 12, "C": 11, "D": 15, "E": 12, "F": 12,
-                 "G": 11, "H": 11, "I": 11, "J": 15, "K": 44})
+                 "G": 11, "H": 11, "I": 11, "J": 12, "K": 13, "L": 15,
+                 "M": 15, "N": 44})
     ws.freeze_panes = f"A{head + 1}"
     if len(items):
-        ws.auto_filter.ref = f"A{head}:K{head + len(items)}"
+        ws.auto_filter.ref = f"A{head}:N{head + len(items)}"
 
 
 # =============================================================================

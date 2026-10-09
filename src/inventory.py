@@ -30,6 +30,21 @@
     D — годовой спрос, S — стоимость размещения заказа, H — стоимость
     хранения единицы в год. Применяем как ограничение снизу на размер
     партии: заказывать по 3 штуки каждый день невыгодно из-за логистики.
+
+ЗАКАЗ В ДНЯХ
+------------
+У каждого товара свой срок поставки L, поэтому «пора заказывать» наступает
+в разные дни. Для менеджера это главный вопрос — не «какой у меня запас»,
+а «до какого числа нужно успеть оформить заявку»:
+
+    дней запаса          = остаток / спрос в день
+    заказать через       = дней запаса - L - страховой запас в днях
+    заказать до (дата)   = сегодня + «заказать через»
+    придёт (если сегодня) = сегодня + L
+    хватит после заказа  = (остаток + в пути + заказ) / спрос в день
+
+«Сегодня» — это день, следующий за последней датой в файле: именно с него
+начинается прогноз. Если выгрузка свежая, это настоящая сегодняшняя дата.
 """
 
 from __future__ import annotations
@@ -68,6 +83,20 @@ class OrderPlan:
     status: str
     mode: str                       # режим модели: fine_tune / global / stats
     note: str = ""
+    # --- заказ в днях --------------------------------------------------
+    lead_time_days: int = 7         # срок поставки именно этого товара
+    review_period_days: int = 7
+    in_transit: float = 0.0         # уже заказано и едет
+    stock_known: bool = True
+    daily_demand: float = 0.0       # ожидаемый спрос в день (медиана)
+    order_in_days: int | None = None      # через сколько дней нужно заказать
+    order_by_date: str | None = None      # до какой даты успеть с заказом
+    arrival_date: str | None = None       # когда придёт, если заказать сегодня
+    stockout_gap_days: int = 0            # сколько дней не будет товара до прихода
+    expected_lost_units: float = 0.0      # сколько не продадим за эти дни
+    days_after_order: float = -1.0        # на сколько дней хватит с учётом заказа
+    days_after_order_high: float = -1.0   # то же, если спрос окажется высоким
+    covered_until: str | None = None      # до какой даты хватит с учётом заказа
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -97,8 +126,19 @@ def compute_order(
     min_order_qty: float = 0.0,
     order_multiple: float = 1.0,
     service_factor: float = 1.0,
+    as_of: pd.Timestamp | None = None,
 ) -> OrderPlan:
-    """Считает план закупки по одному товару."""
+    """
+    Считает план закупки по одному товару.
+
+    as_of — «сегодня» для расчёта дат. По умолчанию настоящая сегодняшняя
+    дата, но сервер передаёт день после последней даты в файле: прогноз
+    строится именно от него, и даты заказа должны лежать на той же оси.
+    """
+    lead_time_days = int(max(1, round(float(lead_time_days))))
+    review_period_days = int(max(1, round(float(review_period_days))))
+    today = (pd.Timestamp(as_of).normalize() if as_of is not None
+             else pd.Timestamp.today().normalize())
     q50_horizon = max(float(q50_horizon), 0.0)
     q90_horizon = max(float(q90_horizon), q50_horizon)
     has_stock = stock is not None and np.isfinite(stock)
@@ -138,11 +178,39 @@ def compute_order(
     recommended = float(np.ceil(recommended))
 
     daily = q50_horizon / horizon_days if horizon_days else 0.0
+    daily_hi = q90_horizon / horizon_days if horizon_days else 0.0
     days_supply = float(stock_val / daily) if daily > 0 and has_stock else float("inf")
-    stockout_date = None
-    if np.isfinite(days_supply) and days_supply < 365:
-        stockout_date = str((pd.Timestamp.today().normalize()
-                             + pd.Timedelta(days=int(days_supply))).date())
+
+    def on_day(n: float) -> str:
+        return str((today + pd.Timedelta(days=int(n))).date())
+
+    stockout_date = on_day(days_supply) if (
+        np.isfinite(days_supply) and days_supply < 365) else None
+
+    # --- заказ в днях ----------------------------------------------------
+    safety_days = safety_stock / daily if daily > 0 else 0.0
+    order_in_days = order_by_date = None
+    if has_stock and np.isfinite(days_supply):
+        # через сколько дней остаток дойдёт до точки перезаказа
+        order_in_days = int(max(0, np.floor(days_supply - lead_time_days
+                                            - safety_days)))
+        if order_in_days < 365:
+            order_by_date = on_day(order_in_days)
+        else:
+            order_in_days = None
+
+    # сколько дней товара не будет, даже если заказать прямо сейчас
+    gap_days, lost_units = 0, 0.0
+    if has_stock and daily > 0 and days_supply < lead_time_days:
+        gap_days = int(np.ceil(lead_time_days - days_supply))
+        lost_units = round(float((lead_time_days - days_supply) * daily), 1)
+
+    # на сколько хватит, если докупить рекомендованное
+    after_total = stock_val + float(in_transit) + recommended
+    days_after = float(after_total / daily) if daily > 0 else float("inf")
+    days_after_hi = float(after_total / daily_hi) if daily_hi > 0 else float("inf")
+    covered_until = on_day(days_after) if (
+        np.isfinite(days_after) and days_after < 730) else None
 
     if not has_stock:
         status = STATUS_ALERT if recommended > 0 else STATUS_OK
@@ -175,12 +243,30 @@ def compute_order(
         status=status,
         mode=mode,
         note=note,
+        lead_time_days=lead_time_days,
+        review_period_days=review_period_days,
+        in_transit=round(float(in_transit), 1),
+        stock_known=bool(has_stock),
+        daily_demand=round(daily, 2),
+        order_in_days=order_in_days,
+        order_by_date=order_by_date,
+        arrival_date=on_day(lead_time_days),
+        stockout_gap_days=gap_days,
+        expected_lost_units=lost_units,
+        days_after_order=round(days_after, 1) if np.isfinite(days_after) else -1.0,
+        days_after_order_high=(round(days_after_hi, 1)
+                               if np.isfinite(days_after_hi) else -1.0),
+        covered_until=covered_until,
     )
 
 
 def build_order_plan(forecasts: pd.DataFrame, stocks: dict[str, float] | None = None,
                      horizon_days: int = 30,
                      service_factors: dict[str, float] | None = None,
+                     lead_times: dict[str, float] | None = None,
+                     review_periods: dict[str, float] | None = None,
+                     in_transit: dict[str, float] | None = None,
+                     as_of: pd.Timestamp | None = None,
                      **kwargs) -> pd.DataFrame:
     """
     forecasts: DataFrame с колонками sku, q50, q90, mode
@@ -189,9 +275,20 @@ def build_order_plan(forecasts: pd.DataFrame, stocks: dict[str, float] | None = 
                Считается автоматически из экономики товара
                (см. economics.derive_sku_economics). Если не передан,
                берётся общий из kwargs или 1.0.
+    lead_times / review_periods: срок поставки и период между заказами
+               по каждому товару, в днях. Для товара, которого в словаре
+               нет, берётся общее значение из lead_time_days /
+               review_period_days.
+    in_transit: сколько штук уже заказано и едет к нам.
     """
     plans = []
     default_factor = kwargs.pop("service_factor", 1.0)
+    default_lead = kwargs.pop("lead_time_days", 7)
+    default_review = kwargs.pop("review_period_days", 7)
+    lead_times = lead_times or {}
+    review_periods = review_periods or {}
+    in_transit = in_transit or {}
+
     for _, r in forecasts.iterrows():
         sku = r["sku"]
         stock = None
@@ -206,15 +303,24 @@ def build_order_plan(forecasts: pd.DataFrame, stocks: dict[str, float] | None = 
         if service_factors:
             factor = service_factors.get(sku, default_factor)
 
+        lead = lead_times.get(sku)
+        review = review_periods.get(sku)
         plans.append(compute_order(
             sku=sku, q50_horizon=r["q50"], q90_horizon=r["q90"],
             horizon_days=horizon_days, stock=stock,
             mode=r.get("mode", "global"), service_factor=factor,
-            **kwargs).to_dict())
+            lead_time_days=default_lead if lead is None or not np.isfinite(lead) else lead,
+            review_period_days=(default_review if review is None
+                                or not np.isfinite(review) else review),
+            in_transit=float(in_transit.get(sku, 0.0) or 0.0),
+            as_of=as_of, **kwargs).to_dict())
 
     out = pd.DataFrame(plans)
     if out.empty:
         return out
     order = {STATUS_CRITICAL: 0, STATUS_ALERT: 1, STATUS_EXCESS: 2, STATUS_OK: 3}
     out["_o"] = out["status"].map(order).fillna(9)
-    return out.sort_values(["_o", "sku"]).drop(columns="_o").reset_index(drop=True)
+    # внутри статуса сначала то, что надо заказывать раньше всего
+    out["_d"] = out["order_in_days"].fillna(9999)
+    return (out.sort_values(["_o", "_d", "sku"])
+               .drop(columns=["_o", "_d"]).reset_index(drop=True))

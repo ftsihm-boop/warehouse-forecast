@@ -163,8 +163,13 @@ DOMAINS = {
 }
 
 
+# Сроки поставки (мин, макс+1 дней) по типу спроса
+LEAD_RANGE = {"smooth": (2, 6), "seasonal": (6, 14), "erratic": (4, 9),
+              "intermittent": (10, 20), "lumpy": (12, 25)}
+
+
 def generate(years: float, n_products: int, start: str, seed: int,
-             domain: str = "grocery") -> pd.DataFrame:
+             domain: str = "grocery", anomalies: bool = True) -> pd.DataFrame:
     cfg = DOMAINS[domain]
     products = cfg["products"][:n_products]
     dow_profile = cfg["dow"]
@@ -178,8 +183,16 @@ def generate(years: float, n_products: int, start: str, seed: int,
     dates = pd.date_range(start, periods=days, freq="D")
 
     rows = []
-    for (name, cost, margin, base, weekly, yearly, peak, cv, promo_p, kind) in products:
+    n_days = len(dates)
+    for p_idx, (name, cost, margin, base, weekly, yearly, peak, cv, promo_p, kind) in enumerate(products):
         price = round(cost / (1 - margin))
+        # срок поставки зависит от типа товара: хлеб привозит местный
+        # пекарь за пару дней, импорт и редкие позиции — за недели
+        lead = int(rng.integers(*LEAD_RANGE[kind]))
+        pipeline: list[tuple[int, float]] = []     # (день прихода, штук)
+        recent: list[float] = []                   # спрос последних 28 дней
+        shrink_days = (set(int(x) for x in rng.integers(300, n_days - 60, 4))
+                       if anomalies and p_idx == 2 else set())
         # запас на старте: примерно двухнедельная потребность
         stock = float(base * rng.uniform(10, 18))
         # лёгкий тренд спроса и годовая инфляция цен
@@ -214,22 +227,89 @@ def generate(years: float, n_products: int, start: str, seed: int,
             sold = min(demand, stock)
             stock -= sold
 
-            # поставка: когда запас падает ниже недельной потребности
-            weekly_need = max(base * 7, 7)
-            if stock < weekly_need * 0.55 and rng.random() < 0.5:
-                stock += round(weekly_need * rng.uniform(1.4, 2.6))
+            # приход заказов, сделанных раньше
+            arrived = sum(q for (day, q) in pipeline if day <= i)
+            pipeline = [(day, q) for (day, q) in pipeline if day > i]
+            stock += arrived
+
+            # недостача: товар исчез со склада без продажи
+            if i in shrink_days:
+                stock = max(stock - max(round(base * 1.5), 3), 0.0)
+
+            # Закупщик заказывает, когда запас с учётом заказанного упал
+            # ниже потребности на срок поставки плюс неделю. Поставщик
+            # иногда задерживает — так появляются дни дефицита.
+            recent.append(demand)
+            if len(recent) > 28:
+                recent.pop(0)
+            rate = max(float(np.mean(recent)), base * 0.3)
+            position = stock + sum(q for (_d, q) in pipeline)
+            if position < rate * (lead + 7) * 1.1:
+                qty = round(rate * (lead + 7 + 12) - position)
+                if qty > 0:
+                    delay = 0 if rng.random() > 0.12 else int(rng.integers(2, 6))
+                    pipeline.append((i + lead + delay, float(qty)))
 
             # цены медленно растут (~8% в год), промо снижает цену продажи
             infl = 1 + 0.08 * (i / 365.25)
             day_price = round(price * infl * (0.85 if promo > 1 else 1.0), 2)
             day_cost = round(cost * infl, 2)
 
-            rows.append((d, name, int(sold), int(round(stock)), day_price, day_cost))
+            rows.append((d, name, int(sold), int(round(stock)), day_price,
+                         day_cost, lead))
 
     df = pd.DataFrame(rows, columns=[
         "Дата", "Товар", "Продано", "Остаток на складе",
-        "Цена продажи", "Закупочная цена"])
+        "Цена продажи", "Закупочная цена", "Срок поставки, дн"])
+    if anomalies:
+        df = inject_anomalies(df, products, rng)
     return df.sort_values(["Дата", "Товар"]).reset_index(drop=True)
+
+
+def inject_anomalies(df: pd.DataFrame, products: list[tuple],
+                     rng: np.random.Generator) -> pd.DataFrame:
+    """
+    Добавляет в файл типичные ошибки учёта — чтобы на демонстрации было что
+    показать на вкладке «Аномалии». Всё это реально встречается в выгрузках:
+    возвраты отрицательной строкой, чек, разбитый на две строки, опечатка
+    в цене, остаток, который перестали обновлять, и товар, снятый с продажи.
+    """
+    df = df.copy()
+    names = [p[0] for p in products]
+    last = df["Дата"].max()
+
+    # возвраты: покупатель вернул пару штук
+    sold_rows = df.index[(df["Продано"] > 3)]
+    for i in rng.choice(sold_rows, 6, replace=False):
+        df.at[i, "Продано"] = -int(rng.integers(1, 4))
+
+    # чек разбит на две строки одного дня
+    extra = []
+    for i in rng.choice(df.index[df["Продано"] > 4], 5, replace=False):
+        a = int(df.at[i, "Продано"]) // 2
+        row = df.loc[i].copy()
+        df.at[i, "Продано"] = int(df.at[i, "Продано"]) - a
+        row["Продано"] = a
+        extra.append(row)
+    df = pd.concat([df, pd.DataFrame(extra)], ignore_index=True)
+
+    # опечатка в цене: лишний ноль
+    if len(names) > 1:
+        idx = df.index[df["Товар"] == names[1]]
+        for i in rng.choice(idx[100:], 3, replace=False):
+            df.at[i, "Цена продажи"] = round(df.at[i, "Цена продажи"] * 10, 2)
+
+    # остаток «застрял»: последние три недели не обновлялся
+    if len(names) > 3:
+        m = (df["Товар"] == names[3]) & (df["Дата"] > last - pd.Timedelta(days=21))
+        if m.any():
+            df.loc[m, "Остаток на складе"] = df.loc[m, "Остаток на складе"].iloc[0]
+
+    # товар снят с продажи: последние 50 дней ни одной продажи
+    if len(names) > 15:
+        m = (df["Товар"] == names[15]) & (df["Дата"] > last - pd.Timedelta(days=50))
+        df.loc[m, "Продано"] = 0
+    return df
 
 
 def write_excel(df: pd.DataFrame, path: Path) -> None:
@@ -247,7 +327,7 @@ def write_excel(df: pd.DataFrame, path: Path) -> None:
             cell.font = head_font
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
-        widths = {"A": 13, "B": 38, "C": 11, "D": 19, "E": 14, "F": 17}
+        widths = {"A": 13, "B": 38, "C": 11, "D": 19, "E": 14, "F": 17, "G": 18}
         for col, w in widths.items():
             ws.column_dimensions[col].width = w
 
@@ -270,6 +350,9 @@ def main() -> None:
                     help="дата начала; по умолчанию так, чтобы история "
                          "заканчивалась сегодня")
     ap.add_argument("--seed", type=int, default=2026)
+    ap.add_argument("--clean", action="store_true",
+                    help="без искусственных ошибок учёта (по умолчанию в файл "
+                         "добавляются возвраты, опечатки в ценах и т. п.)")
     ap.add_argument("--out", default=None,
                     help="куда писать; по умолчанию имя зависит от области")
     a = ap.parse_args()
@@ -281,7 +364,8 @@ def main() -> None:
         start = (pd.Timestamp.today().normalize()
                  - pd.Timedelta(days=days - 1)).strftime("%Y-%m-%d")
 
-    df = generate(a.years, a.products, start, a.seed, a.domain)
+    df = generate(a.years, a.products, start, a.seed, a.domain,
+                  anomalies=not a.clean)
 
     out = Path(a.out or DOMAINS[a.domain]["out"])
     out.parent.mkdir(parents=True, exist_ok=True)
