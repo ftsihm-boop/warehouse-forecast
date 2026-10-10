@@ -129,8 +129,9 @@ class QuantileModel:
     def fine_tune(self, X: pd.DataFrame, y: pd.Series) -> "QuantileModel":
         """
         Дообучение на данных пользователя (режим FINE_TUNE).
-        CatBoost умеет продолжать обучение через init_model; sklearn — нет,
-        поэтому там просто переобучаемся на объединённой выборке.
+        CatBoost продолжает обучение через init_model, sklearn — через
+        warm_start (достраивает деревья к уже обученной модели). Если и это
+        не вышло, модель обучается заново на данных пользователя.
         """
         Xv = X[self.features].to_numpy(dtype=float)
         yv = np.asarray(y, dtype=float)
@@ -151,6 +152,25 @@ class QuantileModel:
 
         tuned = QuantileModel(self.alpha_low, self.alpha_high,
                               list(self.features), self.backend)
+
+        # sklearn: аналог init_model у CatBoost — warm_start. Берём копию
+        # обученной модели и достраиваем к её деревьям новые, обучая их уже
+        # на данных пользователя. Общие закономерности (недели, сезоны)
+        # остаются, а калибровка под его ассортимент подстраивается.
+        if self.model_low is not None and self.model_high is not None:
+            try:
+                import copy
+                for attr in ("model_low", "model_high"):
+                    base = copy.deepcopy(getattr(self, attr))
+                    done = int(getattr(base, "n_iter_", 0))
+                    base.set_params(warm_start=True, max_iter=done + 150,
+                                    learning_rate=FINE_TUNE_PARAMS["learning_rate"])
+                    base.fit(Xv, yv)
+                    setattr(tuned, attr, base)
+                return tuned
+            except Exception:  # noqa: BLE001 — запасной путь ниже
+                pass
+
         tuned.fit(X[self.features], y)
         return tuned
 

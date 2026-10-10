@@ -46,11 +46,12 @@ def main() -> int:
     except Exception as e:  # noqa: BLE001
         print(f"ОШИБКА: модель не читается — {e}")
         print()
-        print("Чаще всего причина одна: модель обучена CatBoost, а в этом")
-        print("окружении его нет. Решения два:")
-        print("  1) снять решётку со строки catboost в requirements-runtime.txt;")
-        print("  2) переобучить модель: python -m src.train --data <файл> "
-              "--out models/global --backend sklearn")
+        print("Две частые причины:")
+        print("  1) модель сохранена в scikit-learn другой версии: pickle читается")
+        print("     только той же версией (в requirements-runtime.txt она закреплена);")
+        print("  2) модель обучена CatBoost, а в этом окружении его нет — тогда")
+        print("     снимите решётку со строки catboost в requirements-runtime.txt")
+        print("     или переобучите: python -m src.train --data <файл> --out models/global --backend sklearn")
         return 1
 
     n = len(model.features or [])
