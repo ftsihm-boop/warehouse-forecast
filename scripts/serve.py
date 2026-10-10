@@ -25,6 +25,7 @@ api/main.py написан на FastAPI — это правильный выбо
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 import sys
@@ -87,7 +88,7 @@ MAX_UPLOAD = 25 * 1024 * 1024
 # работу. А если сервер всё же перезапустился, страница сама загрузит
 # сохранённый файл заново (см. восстановление в web/index.html).
 SESSION_TTL = timedelta(hours=2)
-MAX_SESSIONS = 3
+MAX_SESSIONS = 2
 
 # --- отслеживание этапов обработки файла ----------------------------------
 # Загрузка занимает секунды, а дообучение модели — ещё несколько, и всё
@@ -103,12 +104,12 @@ PROGRESS_LOCK = threading.Lock()
 PROGRESS_TTL = timedelta(minutes=10)
 
 
-def _progress(uid: str | None, stage: str, pct: int) -> None:
+def _progress(uid: str | None, stage: str, pct: int, **extra) -> None:
     if not uid:
         return
     with PROGRESS_LOCK:
         PROGRESS[uid] = {"stage": stage, "pct": pct,
-                         "ts": datetime.utcnow().isoformat()}
+                         "ts": datetime.utcnow().isoformat(), **extra}
         if len(PROGRESS) > 200:
             cutoff = datetime.utcnow() - PROGRESS_TTL
             for k in [k for k, v in PROGRESS.items()
@@ -119,7 +120,7 @@ def _progress(uid: str | None, stage: str, pct: int) -> None:
 def h_upload_progress(q) -> dict:
     uid = (q.get("uid") or [""])[0]
     with PROGRESS_LOCK:
-        return dict(PROGRESS.get(uid) or {"stage": "Готовлюсь…", "pct": 0})
+        return dict(PROGRESS.get(uid) or {"stage": "Готовлюсь…", "pct": 0, "unknown": True})
 
 SESSIONS: dict[str, dict] = {}
 SESSION_LOCK = threading.Lock()
@@ -628,6 +629,88 @@ def _impact_to_text(d: dict) -> str:
     return "\n".join(L)
 
 
+
+UPLOAD_SLOT = threading.Semaphore(1)
+
+
+def _process_upload(uid: str, filename: str, payload: bytes) -> None:
+    """Разбор, очистка, обучение и первый прогноз — в фоновом потоке."""
+    try:
+        # Два тяжёлых расчёта одновременно не помещаются в память контейнера,
+        # поэтому вторая загрузка ждёт, пока закончится первая.
+        if not UPLOAD_SLOT.acquire(blocking=False):
+            _progress(uid, "Жду очереди: сервер обрабатывает другой файл…", 3)
+            UPLOAD_SLOT.acquire()
+        try:
+            _run_upload(uid, filename, payload)
+        finally:
+            UPLOAD_SLOT.release()
+    except ApiError as e:
+        _progress(uid, e.message, 100, done=True, error=e.message, status=e.status)
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        _progress(uid, "Ошибка", 100, done=True,
+                  error=f"Ошибка сервера: {e}", status=500)
+    finally:
+        gc.collect()
+
+
+def _run_upload(uid: str, filename: str, payload: bytes) -> None:
+    _progress(uid, "Разбираю таблицу и распознаю колонки…", 15)
+    try:
+        ingested = read_table(payload, filename)
+    except IngestError as e:
+        raise ApiError(422, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise ApiError(422, f"Не удалось разобрать файл: {e}") from e
+
+    _progress(uid, "Чищу данные: дубли, выбросы, пропуски…", 30)
+    df, report = clean(ingested)
+    if df.empty:
+        raise ApiError(422, "После очистки не осталось пригодных данных.")
+
+    # Проверяем, подходит ли модель к этим данным, и при
+    # необходимости дообучаем её прямо сейчас. Так пользователь
+    # получает прогноз, настроенный под его ассортимент, а не
+    # усреднённый по чужому.
+    session_model, fit = None, None
+    if MODEL is not None:
+        _progress(uid, "Дообучаю модель на ваших данных…", 45)
+        try:
+            session_model, fit_report = adapt_to_data(df, MODEL)
+            fit = fit_report.to_dict()
+            if fit_report.action != "fine_tuned":
+                session_model = None      # осталась глобальная
+            print(f"  проверка модели: {fit_report.message}")
+        except Exception as e:  # noqa: BLE001
+            print(f"  проверка модели не удалась: {e}")
+
+    _progress(uid, "Описываю данные и ищу аномалии…", 70)
+    sid = uuid.uuid4().hex
+    sess = {"df": df, "report": report, "model": session_model, "fit": fit,
+            "filename": filename, "mapping": ingested.mapping,
+            "created": datetime.utcnow(), "touched": datetime.utcnow(),
+            "fc": {}, "acc": {}, "fc_lock": threading.RLock()}
+    sess["dataset"] = describe_dataset(df, report)
+    sess["anomalies"] = build_anomaly_report(df, report)
+    sess["features"] = feature_overview(df)
+
+    # Первый прогноз и оценка точности считаются сразу, пока человек
+    # смотрит на индикатор: так экран «Что заказать» откроется мгновенно.
+    _progress(uid, "Строю прогноз спроса…", 80)
+    _forecast_cached(sess, 30, uid)
+    _progress(uid, "Проверяю точность на прошлом…", 92)
+    _accuracy_cached(sess, 14)
+
+    with SESSION_LOCK:
+        SESSIONS[sid] = sess
+    # Чистим ПОСЛЕ добавления: иначе новая сессия ложится сверх
+    # лимита и их фактически остаётся на одну больше.
+    _gc_sessions()
+
+    _progress(uid, "Готово", 100, done=True, session_id=sid)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "WarehouseForecast/1.0"
 
@@ -797,7 +880,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"detail": f"Ошибка сервера: {e}"}, 500)
 
     def _handle_upload(self) -> None:
-        uid = (parse_qs(urlparse(self.path).query).get("uid") or [""])[0]
+        uid = (parse_qs(urlparse(self.path).query).get("uid") or [""])[0] or uuid.uuid4().hex
         _progress(uid, "Принимаю файл…", 5)
 
         length = int(self.headers.get("Content-Length") or 0)
@@ -822,60 +905,13 @@ class Handler(BaseHTTPRequestHandler):
         if payload is None:
             raise ApiError(400, "В запросе нет файла.")
 
-        _progress(uid, "Разбираю таблицу и распознаю колонки…", 15)
-        try:
-            ingested = read_table(payload, filename)
-        except IngestError as e:
-            raise ApiError(422, str(e)) from e
-        except Exception as e:  # noqa: BLE001
-            raise ApiError(422, f"Не удалось разобрать файл: {e}") from e
-
-        _progress(uid, "Чищу данные: дубли, выбросы, пропуски…", 30)
-        df, report = clean(ingested)
-        if df.empty:
-            raise ApiError(422, "После очистки не осталось пригодных данных.")
-
-        # Проверяем, подходит ли модель к этим данным, и при
-        # необходимости дообучаем её прямо сейчас. Так пользователь
-        # получает прогноз, настроенный под его ассортимент, а не
-        # усреднённый по чужому.
-        session_model, fit = None, None
-        if MODEL is not None:
-            _progress(uid, "Дообучаю модель на ваших данных…", 45)
-            try:
-                session_model, fit_report = adapt_to_data(df, MODEL)
-                fit = fit_report.to_dict()
-                if fit_report.action != "fine_tuned":
-                    session_model = None      # осталась глобальная
-                print(f"  проверка модели: {fit_report.message}")
-            except Exception as e:  # noqa: BLE001
-                print(f"  проверка модели не удалась: {e}")
-
-        _progress(uid, "Описываю данные и ищу аномалии…", 70)
-        sid = uuid.uuid4().hex
-        sess = {"df": df, "report": report, "model": session_model, "fit": fit,
-                "filename": filename, "mapping": ingested.mapping,
-                "created": datetime.utcnow(), "touched": datetime.utcnow(),
-                "fc": {}, "acc": {}, "fc_lock": threading.RLock()}
-        sess["dataset"] = describe_dataset(df, report)
-        sess["anomalies"] = build_anomaly_report(df, report)
-        sess["features"] = feature_overview(df)
-
-        # Первый прогноз и оценка точности считаются сразу, пока человек
-        # смотрит на индикатор: так экран «Что заказать» откроется мгновенно.
-        _progress(uid, "Строю прогноз спроса…", 80)
-        _forecast_cached(sess, 30, uid)
-        _progress(uid, "Проверяю точность на прошлом…", 92)
-        _accuracy_cached(sess, 14)
-
-        with SESSION_LOCK:
-            SESSIONS[sid] = sess
-        # Чистим ПОСЛЕ добавления: иначе новая сессия ложится сверх
-        # лимита и их фактически остаётся на одну больше.
-        _gc_sessions()
-
-        _progress(uid, "Готово", 100)
-        self._json(_session_payload(sid, sess))
+        # Расчёт идёт в фоне, а запрос сразу возвращает ответ. На слабом
+        # процессоре (четверть ядра) первая обработка занимает больше минуты,
+        # и обрыв соединения на стороне платформы убил бы всё в самом конце.
+        # Страница опрашивает /upload-progress и получает готовый результат.
+        threading.Thread(target=_process_upload, args=(uid, filename, payload),
+                         daemon=True).start()
+        self._json({"job": uid}, 202)
 
 
 def main() -> None:

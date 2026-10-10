@@ -143,27 +143,44 @@ async function uploadFile(file, name, opts = {}) {
   uploading = true;
   const uid = Math.random().toString(36).slice(2);
   showStage(opts.restore ? "Восстанавливаю ваши данные" : "Разбираю файл", opts.restore
-    ? "Сервер был перезапущен — загружаю ваш файл заново. Это займёт несколько секунд."
-    : "Обычно это занимает 10–30 секунд: система очищает данные, ищет ошибки и строит первый прогноз.");
+    ? "Сервер был перезапущен — загружаю ваш файл заново. Это может занять до минуты."
+    : "Первая загрузка может занять до пары минут: система очищает данные, ищет ошибки и строит прогноз. Страницу можно не закрывать — просто подождите.");
   setBusy("upload", "Загружаю файл…");
-  const poll = setInterval(async () => {
-    try {
-      const p = await api("/upload-progress?uid=" + uid);
-      const t = $("#stageText"), b = $("#stageBar");
-      if (t) t.textContent = p.stage;
-      if (b) b.style.width = Math.max(4, p.pct) + "%";
-    } catch { /* пропускаем */ }
-  }, 700);
+  let poll = null;
   try {
     const fd = new FormData();
     fd.append("file", file, name);
-    const resp = await fetch("/upload?uid=" + uid, { method: "POST", body: fd });
+    let resp;
+    try { resp = await fetch("/upload?uid=" + uid, { method: "POST", body: fd }); }
+    catch { throw new ApiError(0, "Нет связи с сервером. Проверьте интернет и попробуйте ещё раз."); }
     if (!resp.ok) {
       let msg = "Не удалось загрузить файл.";
       try { msg = (await resp.json()).detail || msg; } catch { /* не json */ }
       throw new ApiError(resp.status, msg);
     }
-    const sess = await resp.json();
+    // Сервер считает в фоне — ждём результат, показывая настоящий прогресс.
+    const sess = await new Promise((resolve, reject) => {
+      let fails = 0, seen = false;
+      const tick = async () => {
+        try {
+          const p = await api("/upload-progress?uid=" + uid);
+          fails = 0;
+          if (p.unknown && seen) return reject(new ApiError(0, "Сервер перезапустился во время расчёта. Загрузите файл ещё раз."));
+          if (!p.unknown) seen = true;
+          const t = $("#stageText"), b = $("#stageBar");
+          if (t) t.textContent = p.stage;
+          if (b) b.style.width = Math.max(4, p.pct) + "%";
+          if (p.done) {
+            if (p.error) return reject(new ApiError(p.status || 500, p.error));
+            try { return resolve(await api("/session?session_id=" + p.session_id)); } catch (e) { return reject(e); }
+          }
+        } catch (e) {
+          if (++fails >= 30) return reject(new ApiError(0, "Нет связи с сервером. Проверьте интернет и попробуйте ещё раз."));
+        }
+        poll = setTimeout(tick, 1000);
+      };
+      tick();
+    });
     const key = name + ":" + file.size;
     if (S.fileKey !== key) { S.set.lead_overrides = {}; S.set.in_transit = {}; S.set.stock_overrides = {}; }
     S.fileKey = key;
@@ -178,7 +195,7 @@ async function uploadFile(file, name, opts = {}) {
     S.sid = null; save();
     showUpload(e.message || "Не удалось загрузить файл.");
   } finally {
-    clearInterval(poll);
+    clearTimeout(poll);
     uploading = false;
     setBusy("upload", null);
   }

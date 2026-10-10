@@ -44,5 +44,5 @@
     "days_after_holiday",
     "horizon"
   ],
-  "backend": "catboost"
+  "backend": "sklearn"
 }

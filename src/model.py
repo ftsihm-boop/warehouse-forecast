@@ -33,7 +33,9 @@ try:  # pragma: no cover - зависит от окружения
 except ImportError:  # pragma: no cover
     HAS_CATBOOST = False
 
-from sklearn.ensemble import HistGradientBoostingRegressor
+# sklearn подключается только в запасном режиме (внутри _make): на сервере
+# работает CatBoost, а сам sklearn держит в памяти около 100 МБ, которых
+# в контейнере на 286 МБ не хватает.
 
 # Число потоков для CatBoost.
 #
@@ -91,6 +93,7 @@ class QuantileModel:
             if threads:
                 p = {**p, "thread_count": threads}
             return CatBoostRegressor(loss_function=f"Quantile:alpha={alpha}", **p)
+        from sklearn.ensemble import HistGradientBoostingRegressor
         return HistGradientBoostingRegressor(
             loss="quantile", quantile=alpha,
             max_iter=p["iterations"] // 4,
